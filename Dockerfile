@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:22-slim
 
 # Install system dependencies for Chromium/Puppeteer
 RUN apt-get update && apt-get install -y \
@@ -17,7 +17,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install packages
-RUN npm ci
+RUN npm install
 
 # Copy rest of the files
 COPY . .
