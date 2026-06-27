@@ -73,7 +73,7 @@ export default function HomePage() {
   const [generatedCode, setGeneratedCode] = useState('');
   const [generatedLink, setGeneratedLink] = useState('');
 
-  // Load display name, theme, and accent from localStorage
+  // Load display name, theme, and accent from localStorage + query params
   useEffect(() => {
     const saved = localStorage.getItem('roomchat_display_name');
     if (saved) setDisplayName(saved);
@@ -87,6 +87,14 @@ export default function HomePage() {
 
     const savedAccent = localStorage.getItem('roomchat_accent') || 'indigo';
     document.documentElement.dataset.accent = savedAccent;
+
+    // Check for room error redirect
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('error') === 'room_expired') {
+      setError('This room does not exist or has expired. Please create a new room.');
+      // Clean query parameters from URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, []);
 
   // Save display name to localStorage

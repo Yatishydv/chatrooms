@@ -208,6 +208,11 @@ app.prepare().then(() => {
       
       let room = rooms.get(roomId);
       if (!room) {
+        if (!creatorKey) {
+          socket.emit('room_error', { message: 'This room does not exist or has expired. Please create a new room from the dashboard.' });
+          socket.leave(roomId);
+          return;
+        }
         room = {
           code: roomId,
           name: roomName || 'Unnamed Room',
@@ -215,7 +220,7 @@ app.prepare().then(() => {
           users: {},
           messages: [],
           typingUsers: [],
-          creatorKey: creatorKey || crypto.randomUUID(),
+          creatorKey: creatorKey,
           lastActivity: Date.now()
         };
         rooms.set(roomId, room);

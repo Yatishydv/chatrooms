@@ -6,7 +6,7 @@ import { io, Socket } from 'socket.io-client';
 import {
   Send, Image as ImageIcon, Settings, Users, Copy, Check,
   ArrowLeft, Trash2, X, Download, Volume2, VolumeX,
-  Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video,
+  Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video, Link2, Paperclip,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import NextImage from 'next/image';
@@ -19,7 +19,7 @@ interface Message {
   id: string;
   sender: string;
   content: string;
-  type: 'text' | 'image' | 'voice' | 'view_once_video';
+  type: 'text' | 'image' | 'voice' | 'view_once_video' | 'video' | 'view_once_image';
   mediaUrl?: string;
   timestamp: string;
   delivered: boolean;
@@ -29,7 +29,7 @@ interface Message {
     id: string;
     sender: string;
     content: string;
-    type: 'text' | 'image' | 'voice' | 'view_once_video';
+    type: 'text' | 'image' | 'voice' | 'view_once_video' | 'video' | 'view_once_image';
   };
 }
 
@@ -366,6 +366,10 @@ export default function ChatRoom() {
       if (data.users.length <= 1) {
         confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 } });
       }
+    });
+
+    socket.on('room_error', (data: { message: string }) => {
+      window.location.href = '/?error=room_expired';
     });
 
     socket.on('room_details_updated', (data: { roomName: string; isPublic: boolean }) => {
@@ -1737,8 +1741,12 @@ export default function ChatRoom() {
             className="hidden"
             onChange={e => handleFileSelect(e.target.files?.[0] ?? null)}
           />
-          <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors shrink-0 cursor-pointer">
-            <ImageIcon size={20} />
+          <button 
+            onClick={() => fileInputRef.current?.click()} 
+            className="p-2 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors shrink-0 cursor-pointer"
+            title="Upload Photo or Video"
+          >
+            <Paperclip size={20} />
           </button>
 
           <div className="flex-1 relative">
@@ -1760,7 +1768,7 @@ export default function ChatRoom() {
             <Search size={20} />
           </button>
 
-          {/* Disappearing Video */}
+          {/* Send Online Media Link */}
           <button
             onClick={() => {
               setViewOnceVideoToPlay(null);
@@ -1768,9 +1776,9 @@ export default function ChatRoom() {
               setShowVideoPopup(true);
             }}
             className="p-2 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors shrink-0 cursor-pointer"
-            title="Send Disappearing Video"
+            title="Send Online Media Link"
           >
-            <Video size={20} />
+            <Link2 size={20} />
           </button>
 
           {/* send */}
