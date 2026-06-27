@@ -17,9 +17,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'File size exceeds 20MB limit' }, { status: 400 });
     }
 
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'audio/wav', 'audio/webm', 'audio/ogg', 'audio/mp3', 'audio/mpeg'];
+    const allowedTypes = [
+      'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 
+      'audio/wav', 'audio/webm', 'audio/ogg', 'audio/mp3', 'audio/mpeg',
+      'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime', 'video/x-matroska', 'video/avi'
+    ];
     if (!allowedTypes.includes(file.type)) {
-      return NextResponse.json({ error: 'Invalid file type' }, { status: 400 });
+      return NextResponse.json({ error: `Invalid file type: ${file.type}` }, { status: 400 });
     }
 
     const bytes = await file.arrayBuffer();
