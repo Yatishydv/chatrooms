@@ -4,6 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const puppeteer = require('puppeteer');
+const path = require('path');
 
 
 const dev = process.env.NODE_ENV !== 'production';
@@ -976,6 +977,9 @@ app.prepare().then(() => {
       return res.status(200).send(proxyErrorPage(targetUrl || '', 'The site could not be reached from the room browser. Try opening it in a new tab.'));
     }
   });
+
+  // Serve uploaded files statically and dynamically at runtime
+  expressApp.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
   // Handle API and Next.js page requests
   expressApp.use((req, res) => {
