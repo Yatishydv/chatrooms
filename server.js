@@ -203,7 +203,7 @@ app.prepare().then(() => {
     // Send list of public rooms to new connections
     socket.emit('public_rooms_update', getPublicRooms());
 
-    socket.on('join_room', ({ roomId, name, isPublic, roomName, creatorKey }) => {
+    socket.on('join_room', ({ roomId, name, isPublic, roomName, creatorKey, userKey }) => {
       socket.join(roomId);
       
       let room = rooms.get(roomId);
@@ -222,17 +222,32 @@ app.prepare().then(() => {
       }
       room.lastActivity = Date.now();
 
-      // Handle duplicate names (rename automatically)
       let finalName = name;
-      let counter = 2;
-      const existingNames = Object.values(room.users).map(u => u.name);
-      while (existingNames.includes(finalName)) {
-        finalName = `${name} (${counter})`;
-        counter++;
+      let isReconnection = false;
+
+      // Handle reconnection logic using persistent userKey
+      if (userKey) {
+        const oldSocketId = Object.keys(room.users).find(sid => room.users[sid].userKey === userKey);
+        if (oldSocketId) {
+          finalName = room.users[oldSocketId].name;
+          delete room.users[oldSocketId];
+          isReconnection = true;
+          console.log(`[Socket] Reconnected user ${finalName} in room ${roomId}`);
+        }
+      }
+
+      if (!isReconnection) {
+        // Handle duplicate names (rename automatically for fresh users)
+        let counter = 2;
+        const existingNames = Object.values(room.users).map(u => u.name);
+        while (existingNames.includes(finalName)) {
+          finalName = `${name} (${counter})`;
+          counter++;
+        }
       }
 
       // Add user to room
-      room.users[socket.id] = { name: finalName };
+      room.users[socket.id] = { name: finalName, userKey };
       
       // Let current client know their final resolved name and historical messages
       socket.emit('joined_info', { 
@@ -245,7 +260,11 @@ app.prepare().then(() => {
       });
 
       // Notify others in room
-      socket.to(roomId).emit('user_joined', { name: finalName, users: Object.values(room.users).map(u => u.name) });
+      if (!isReconnection) {
+        socket.to(roomId).emit('user_joined', { name: finalName, users: Object.values(room.users).map(u => u.name) });
+      } else {
+        io.to(roomId).emit('user_joined', { name: finalName, users: Object.values(room.users).map(u => u.name) });
+      }
       
       // Update public rooms listing if visibility is public
       if (room.isPublic) {

@@ -335,16 +335,25 @@ export default function ChatRoom() {
       const storedTitle = localStorage.getItem(`room_title_${roomId}`) || '';
       const storedVisibility = localStorage.getItem(`room_visibility_${roomId}`) === 'public';
       const storedCreatorKey = localStorage.getItem(`room_creator_key_${roomId}`) || '';
+      
+      let userKey = localStorage.getItem(`room_user_key_${roomId}`);
+      if (!userKey) {
+        userKey = crypto.randomUUID();
+        localStorage.setItem(`room_user_key_${roomId}`, userKey);
+      }
+
       socket.emit('join_room', { 
         roomId, 
         name: displayName, 
         roomName: storedTitle, 
         isPublic: storedVisibility,
-        creatorKey: storedCreatorKey
+        creatorKey: storedCreatorKey,
+        userKey
       });
     });
 
     socket.on('joined_info', (data: { name: string; messages: Message[]; users: string[]; roomName: string; isPublic: boolean; isCreator?: boolean }) => {
+      setDisplayName(data.name);
       setMessages(data.messages);
       setUsers(data.users);
       setRoomName(data.roomName);
