@@ -820,7 +820,7 @@ export default function ChatRoom() {
     const socket = socketRef.current;
 
     const handleResize = (entries: ResizeObserverEntry[]) => {
-      for (let entry of entries) {
+      for (const entry of entries) {
         const { width, height } = entry.contentRect;
         if (width <= 0 || height <= 0) continue;
         
