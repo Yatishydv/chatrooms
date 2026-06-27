@@ -331,7 +331,7 @@ app.prepare().then(() => {
 
       if (action === 'delete') {
         // Only allow deleting own messages, OR any view_once_video message
-        if (msg.sender === user.name || msg.type === 'view_once_video') {
+        if (msg.sender === user.name || msg.type === 'view_once_video' || msg.type === 'view_once_image') {
           room.messages.splice(msgIndex, 1);
           room.lastActivity = Date.now();
           io.to(roomId).emit('message_deleted', messageId);

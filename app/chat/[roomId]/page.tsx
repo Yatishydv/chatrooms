@@ -197,6 +197,10 @@ export default function ChatRoom() {
   const [viewOnceVideoToPlay, setViewOnceVideoToPlay] = useState<string | null>(null);
   const [viewOnceVideoMessageId, setViewOnceVideoMessageId] = useState<string | null>(null);
   const [showVideoPopup, setShowVideoPopup] = useState(false);
+  const [isViewOnceChecked, setIsViewOnceChecked] = useState(false);
+  const [isModalViewOnce, setIsModalViewOnce] = useState(false);
+  const [showImagePopup, setShowImagePopup] = useState(false);
+  const [viewOnceImageToPlay, setViewOnceImageToPlay] = useState<string | null>(null);
   const [browserEmbedError, setBrowserEmbedError] = useState<string | null>(null);
   const [browserFrame, setBrowserFrame] = useState<string | null>(null);
   const [browserLoading, setBrowserLoading] = useState<boolean>(false);
@@ -466,18 +470,27 @@ export default function ChatRoom() {
   /* ---------------------------------------------------------------- */
 
   const handleFileSelect = useCallback((file: File | null) => {
-    if (!file || !file.type.startsWith('image/')) return;
+    if (!file) return;
+    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) return;
     setSelectedFile(file);
-    const reader = new FileReader();
-    reader.onload = () => setFilePreview(reader.result as string);
-    reader.readAsDataURL(file);
+    if (file.type.startsWith('video/')) {
+      const videoUrl = URL.createObjectURL(file);
+      setFilePreview(videoUrl);
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => setFilePreview(reader.result as string);
+      reader.readAsDataURL(file);
+    }
   }, []);
 
   const clearFile = useCallback(() => {
+    if (selectedFile && selectedFile.type.startsWith('video/') && filePreview) {
+      URL.revokeObjectURL(filePreview);
+    }
     setSelectedFile(null);
     setFilePreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, []);
+  }, [selectedFile, filePreview]);
 
   /* Paste from clipboard */
   useEffect(() => {
@@ -537,12 +550,18 @@ export default function ChatRoom() {
     if (selectedFile) {
       const result = await uploadFile(selectedFile);
       if (result) {
+        const isVideo = selectedFile.type.startsWith('video/');
+        let msgType = isVideo ? 'video' : 'image';
+        if (isViewOnceChecked) {
+          msgType = isVideo ? 'view_once_video' : 'view_once_image';
+        }
         socket.emit('send_message', {
           roomId,
-          message: { content: text || '', type: 'image', mediaUrl: result.url, replyTo: replyToPayload },
+          message: { content: text || '', type: msgType, mediaUrl: result.url, replyTo: replyToPayload },
         });
       }
       clearFile();
+      setIsViewOnceChecked(false);
       setText('');
       setReplyingToMessage(null);
       replyingToMessageRef.current = null;
@@ -561,7 +580,7 @@ export default function ChatRoom() {
     setReplyingToMessage(null);
     replyingToMessageRef.current = null;
     if (isTyping) { setIsTyping(false); emitTyping(false); }
-  }, [text, selectedFile, roomId, uploadFile, clearFile, isTyping, emitTyping, replyingToMessage]);
+  }, [text, selectedFile, roomId, uploadFile, clearFile, isTyping, emitTyping, replyingToMessage, isViewOnceChecked]);
 
 
 
@@ -739,9 +758,9 @@ export default function ChatRoom() {
     });
   }, [roomId, googleSearchQuery, googleSearchResults, browserUrl, browserActiveTab, browserMode, displayName, browserPageTitle, browserPageFavicon]);
 
-  const sendViewOnceVideo = useCallback((videoUrl: string) => {
+  const sendOnlineMediaLink = useCallback((urlStr: string, viewOnce: boolean) => {
     const socket = socketRef.current;
-    if (!socket || !videoUrl.trim()) return;
+    if (!socket || !urlStr.trim()) return;
 
     const replyToPayload = replyingToMessage ? {
       id: replyingToMessage.id,
@@ -750,11 +769,24 @@ export default function ChatRoom() {
       type: replyingToMessage.type
     } : undefined;
 
+    const cleanUrl = urlStr.trim();
+    
+    // Auto-detect media type
+    const lowerUrl = cleanUrl.toLowerCase().split('?')[0];
+    const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov', '.quicktime', 'youtube.com', 'youtu.be', 'embed'];
+    const isVideo = videoExtensions.some(ext => lowerUrl.includes(ext));
+    
+    let msgType = isVideo ? 'video' : 'image';
+    if (viewOnce) {
+      msgType = isVideo ? 'view_once_video' : 'view_once_image';
+    }
+
     socket.emit('send_message', {
       roomId,
       message: { 
-        content: videoUrl.trim(), 
-        type: 'view_once_video',
+        content: cleanUrl, 
+        type: msgType,
+        mediaUrl: cleanUrl,
         replyTo: replyToPayload
       },
     });
@@ -1115,8 +1147,52 @@ export default function ChatRoom() {
                     </div>
                   )}
 
+                  {/* video */}
+                  {msg.type === 'video' && msg.mediaUrl && (
+                    <div className="space-y-1">
+                      <video
+                        src={msg.mediaUrl}
+                        controls
+                        playsInline
+                        className="max-w-xs w-full h-auto rounded-lg"
+                      />
+                      {msg.content && <p className="text-sm break-words">{msg.content}</p>}
+                    </div>
+                  )}
+
+                  {/* view_once_image */}
+                  {msg.type === 'view_once_image' && msg.mediaUrl && (
+                    <div className="space-y-2 py-1 flex flex-col items-center">
+                      <div className="flex items-center gap-2 text-xs bg-black/10 rounded-lg px-2.5 py-1.5 font-medium select-none">
+                        <span>🕵️‍♂️</span>
+                        <span>Disappearing Photo Preview</span>
+                      </div>
+                      
+                      <button
+                        onClick={() => {
+                          setViewOnceImageToPlay(msg.mediaUrl!);
+                          setViewOnceVideoMessageId(msg.id);
+                          setShowImagePopup(true);
+                        }}
+                        className="w-full flex items-center justify-center gap-2 cursor-pointer bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-semibold py-2 px-3 rounded-lg transition-colors shadow-sm"
+                      >
+                        <span>👁️</span>
+                        <span>Open & View Photo</span>
+                      </button>
+
+                      {isOwn && (
+                        <button
+                          onClick={() => deleteMessage(msg.id)}
+                          className="text-[10px] underline opacity-70 hover:opacity-100 cursor-pointer"
+                        >
+                          Burn Photo Now
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   {/* view_once_video */}
-                  {msg.type === 'view_once_video' && msg.content && (
+                  {msg.type === 'view_once_video' && (msg.mediaUrl || msg.content) && (
                     <div className="space-y-2 py-1 flex flex-col items-center">
                       <div className="flex items-center gap-2 text-xs bg-black/10 rounded-lg px-2.5 py-1.5 font-medium select-none">
                         <span>🕵️‍♂️</span>
@@ -1125,7 +1201,7 @@ export default function ChatRoom() {
                       
                       <button
                         onClick={() => {
-                          setViewOnceVideoToPlay(msg.content);
+                          setViewOnceVideoToPlay(msg.mediaUrl || msg.content!);
                           setViewOnceVideoMessageId(msg.id);
                           setShowVideoPopup(true);
                         }}
@@ -1597,15 +1673,31 @@ export default function ChatRoom() {
       {/*  IMAGE PREVIEW                                               */}
       {/* =========================================================== */}
       {filePreview && (
-        <div className="px-3 py-2 bg-[var(--bg-secondary)] border-t border-[var(--border-primary)] shrink-0">
-          <div className="relative inline-block">
-            <NextImage src={filePreview} alt="preview" width={120} height={80} className="rounded-lg object-cover h-20 w-auto" unoptimized />
-            <button
-              onClick={clearFile}
-              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-[var(--danger)] text-white flex items-center justify-center"
-            >
-              <X size={12} />
-            </button>
+        <div className="px-3 py-2 bg-[var(--bg-secondary)] border-t border-[var(--border-primary)] shrink-0 flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <div className="relative inline-block">
+              {selectedFile?.type.startsWith('video/') ? (
+                <video src={filePreview} className="rounded-lg object-cover h-20 w-auto bg-black" muted autoPlay loop />
+              ) : (
+                <NextImage src={filePreview} alt="preview" width={120} height={80} className="rounded-lg object-cover h-20 w-auto" unoptimized />
+              )}
+              <button
+                onClick={clearFile}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-[var(--danger)] text-white flex items-center justify-center cursor-pointer"
+              >
+                <X size={12} />
+              </button>
+            </div>
+            
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-secondary)] cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={isViewOnceChecked} 
+                onChange={(e) => setIsViewOnceChecked(e.target.checked)}
+                className="accent-[var(--accent)] w-3.5 h-3.5" 
+              />
+              <span>🕵️‍♂️ View Once</span>
+            </label>
           </div>
         </div>
       )}
@@ -1641,7 +1733,7 @@ export default function ChatRoom() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,video/*"
             className="hidden"
             onChange={e => handleFileSelect(e.target.files?.[0] ?? null)}
           />
@@ -1998,7 +2090,7 @@ export default function ChatRoom() {
                 /* Sender entry view */
                 <div className="space-y-4">
                   <div className="flex items-center justify-between border-b border-[var(--border-primary)] pb-2">
-                    <span className="text-sm font-semibold text-[var(--text-primary)]">Send Disappearing Video</span>
+                    <span className="text-sm font-semibold text-[var(--text-primary)]">Send Online Media Link</span>
                     <button 
                       onClick={() => setShowVideoPopup(false)}
                       className="p-1 rounded-md hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] cursor-pointer"
@@ -2008,16 +2100,26 @@ export default function ChatRoom() {
                   </div>
 
                   <div className="space-y-3">
-                    <label className="text-xs font-medium text-[var(--text-secondary)] block">Paste Video URL</label>
+                    <label className="text-xs font-medium text-[var(--text-secondary)] block">Paste Video or Photo URL</label>
                     <input 
                       type="text" 
                       id="video-url-input"
-                      placeholder="e.g. https://example.com/video.mp4"
+                      placeholder="e.g. https://example.com/media.mp4 or photo.jpg"
                       className="w-full text-xs px-3 py-2.5 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                     />
 
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-secondary)] cursor-pointer select-none py-1">
+                      <input 
+                        type="checkbox" 
+                        checked={isModalViewOnce} 
+                        onChange={(e) => setIsModalViewOnce(e.target.checked)}
+                        className="accent-[var(--accent)] w-3.5 h-3.5" 
+                      />
+                      <span>🕵️‍♂️ Send as View Once (Disappearing)</span>
+                    </label>
+
                     <div className="space-y-1">
-                      <span className="text-[10px] text-[var(--text-tertiary)] font-semibold uppercase tracking-wider block">Or Choose Mock Video Preview:</span>
+                      <span className="text-[10px] text-[var(--text-tertiary)] font-semibold uppercase tracking-wider block">Or Choose Mock Previews:</span>
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           onClick={() => {
@@ -2026,7 +2128,7 @@ export default function ChatRoom() {
                           }}
                           className="text-left text-[11px] p-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] border border-[var(--border-primary)] transition-colors cursor-pointer block truncate"
                         >
-                          🐰 Big Buck Bunny (Mock)
+                          🐰 Bunny (Video)
                         </button>
                         <button
                           onClick={() => {
@@ -2035,7 +2137,25 @@ export default function ChatRoom() {
                           }}
                           className="text-left text-[11px] p-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] border border-[var(--border-primary)] transition-colors cursor-pointer block truncate"
                         >
-                          🐘 Elephants Dream (Mock)
+                          🐘 Elephants (Video)
+                        </button>
+                        <button
+                          onClick={() => {
+                            const input = document.getElementById('video-url-input') as HTMLInputElement;
+                            if (input) input.value = 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800';
+                          }}
+                          className="text-left text-[11px] p-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] border border-[var(--border-primary)] transition-colors cursor-pointer block truncate"
+                        >
+                          🎨 Art (Photo)
+                        </button>
+                        <button
+                          onClick={() => {
+                            const input = document.getElementById('video-url-input') as HTMLInputElement;
+                            if (input) input.value = 'https://images.unsplash.com/photo-1472214222541-d510753a8707?w=800';
+                          }}
+                          className="text-left text-[11px] p-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] border border-[var(--border-primary)] transition-colors cursor-pointer block truncate"
+                        >
+                          🏞️ Nature (Photo)
                         </button>
                       </div>
                     </div>
@@ -2045,16 +2165,75 @@ export default function ChatRoom() {
                     onClick={() => {
                       const input = document.getElementById('video-url-input') as HTMLInputElement;
                       if (input && input.value.trim()) {
-                        sendViewOnceVideo(input.value.trim());
+                        sendOnlineMediaLink(input.value.trim(), isModalViewOnce);
                         setShowVideoPopup(false);
+                        setIsModalViewOnce(false);
                       }
                     }}
                     className="w-full cursor-pointer py-2 px-4 rounded-xl text-xs font-semibold bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] transition-colors text-center"
                   >
-                    Send View-Once Video
+                    Send Media Link
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =========================================================== */}
+      {/*  DISAPPEARING IMAGE VIEW MODAL                              */}
+      {/* =========================================================== */}
+      <AnimatePresence>
+        {showImagePopup && viewOnceImageToPlay && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/80"
+              onClick={() => {
+                if (viewOnceVideoMessageId) {
+                  deleteMessage(viewOnceVideoMessageId);
+                }
+                setShowImagePopup(false);
+                setViewOnceImageToPlay(null);
+                setViewOnceVideoMessageId(null);
+              }}
+            />
+            
+            <div
+              className="relative w-full max-w-lg bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-2xl overflow-hidden shadow-2xl z-10 flex flex-col p-4 gap-4"
+            >
+              <div className="flex items-center justify-between border-b border-[var(--border-primary)] pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">🕵️‍♂️</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Disappearing Photo Preview</span>
+                </div>
+              </div>
+
+              <div className="rounded-lg overflow-hidden border border-[var(--border-primary)] bg-black max-h-[60vh] flex items-center justify-center">
+                <img 
+                  src={viewOnceImageToPlay} 
+                  alt="Disappearing View Once"
+                  className="w-full h-auto max-h-[50vh] object-contain"
+                />
+              </div>
+
+              <p className="text-[11px] text-[var(--text-tertiary)] text-center">
+                Closing or leaving this photo will instantly delete it for everyone in the room.
+              </p>
+
+              <button
+                onClick={() => {
+                  if (viewOnceVideoMessageId) {
+                    deleteMessage(viewOnceVideoMessageId);
+                  }
+                  setShowImagePopup(false);
+                  setViewOnceImageToPlay(null);
+                  setViewOnceVideoMessageId(null);
+                }}
+                className="w-full cursor-pointer py-2 px-4 rounded-xl text-xs font-semibold bg-[var(--danger)] text-white hover:bg-[var(--danger)]/90 transition-colors text-center"
+              >
+                Close & Burn Photo
+              </button>
             </div>
           </div>
         )}
