@@ -199,6 +199,7 @@ export default function ChatRoom() {
   const [showVideoPopup, setShowVideoPopup] = useState(false);
   const [isViewOnceChecked, setIsViewOnceChecked] = useState(false);
   const [isModalViewOnce, setIsModalViewOnce] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const [showImagePopup, setShowImagePopup] = useState(false);
   const [viewOnceImageToPlay, setViewOnceImageToPlay] = useState<string | null>(null);
   const [browserEmbedError, setBrowserEmbedError] = useState<string | null>(null);
@@ -542,7 +543,7 @@ export default function ChatRoom() {
 
   const sendMessage = useCallback(async () => {
     const socket = socketRef.current;
-    if (!socket) return;
+    if (!socket || isSending) return;
 
     const replyToPayload = replyingToMessage ? {
       id: replyingToMessage.id,
@@ -551,40 +552,47 @@ export default function ChatRoom() {
       type: replyingToMessage.type
     } : undefined;
 
-    if (selectedFile) {
-      const result = await uploadFile(selectedFile);
-      if (result) {
-        const isVideo = selectedFile.type.startsWith('video/');
-        let msgType = isVideo ? 'video' : 'image';
-        if (isViewOnceChecked) {
-          msgType = isVideo ? 'view_once_video' : 'view_once_image';
+    setIsSending(true);
+    try {
+      if (selectedFile) {
+        const result = await uploadFile(selectedFile);
+        if (result) {
+          const isVideo = selectedFile.type.startsWith('video/');
+          let msgType = isVideo ? 'video' : 'image';
+          if (isViewOnceChecked) {
+            msgType = isVideo ? 'view_once_video' : 'view_once_image';
+          }
+          socket.emit('send_message', {
+            roomId,
+            message: { content: text || '', type: msgType, mediaUrl: result.url, replyTo: replyToPayload },
+          });
         }
-        socket.emit('send_message', {
-          roomId,
-          message: { content: text || '', type: msgType, mediaUrl: result.url, replyTo: replyToPayload },
-        });
+        clearFile();
+        setIsViewOnceChecked(false);
+        setText('');
+        setReplyingToMessage(null);
+        replyingToMessageRef.current = null;
+        if (isTyping) { setIsTyping(false); emitTyping(false); }
+        return;
       }
-      clearFile();
-      setIsViewOnceChecked(false);
+
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      socket.emit('send_message', {
+        roomId,
+        message: { content: trimmed, type: 'text', replyTo: replyToPayload },
+      });
       setText('');
       setReplyingToMessage(null);
       replyingToMessageRef.current = null;
       if (isTyping) { setIsTyping(false); emitTyping(false); }
-      return;
+    } catch (err) {
+      console.error('Failed to send message:', err);
+    } finally {
+      setIsSending(false);
     }
-
-    const trimmed = text.trim();
-    if (!trimmed) return;
-
-    socket.emit('send_message', {
-      roomId,
-      message: { content: trimmed, type: 'text', replyTo: replyToPayload },
-    });
-    setText('');
-    setReplyingToMessage(null);
-    replyingToMessageRef.current = null;
-    if (isTyping) { setIsTyping(false); emitTyping(false); }
-  }, [text, selectedFile, roomId, uploadFile, clearFile, isTyping, emitTyping, replyingToMessage, isViewOnceChecked]);
+  }, [text, selectedFile, roomId, uploadFile, clearFile, isTyping, emitTyping, replyingToMessage, isViewOnceChecked, isSending]);
 
 
 
@@ -985,7 +993,7 @@ export default function ChatRoom() {
   /*  RENDER: Canx disabled check                                     */
   /* ================================================================ */
 
-  const canSend = text.trim().length > 0 || selectedFile !== null;
+  const canSend = (text.trim().length > 0 || selectedFile !== null) && !isSending;
 
   /* ================================================================ */
   /*  RENDER: Main chat                                               */
@@ -1065,7 +1073,7 @@ export default function ChatRoom() {
       {/* =========================================================== */}
       <div className={`flex-1 flex min-h-0 relative overflow-hidden ${showGoogleSearch ? 'flex-col md:flex-row' : 'flex-row'}`}>
         {/* Messages List */}
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 min-w-0">
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-3 pt-10 pb-3 space-y-1.5 min-w-0">
           {filteredMessages.map(msg => {
           const isOwn    = msg.sender === displayName;
           const isSystem = msg.sender === '__system__';
@@ -1250,7 +1258,7 @@ export default function ChatRoom() {
 
                 {/* hover actions */}
                 {hoveredMsg === msg.id && (
-                  <div className={`absolute -top-9 ${isOwn ? 'right-0' : 'left-0'} flex items-center gap-1 bg-[var(--bg-elevated)] border border-[var(--border-primary)] rounded-full px-2 py-1 shadow-[var(--shadow)] z-10 animate-in fade-in zoom-in-95 duration-100`}>
+                  <div className={`absolute -top-9 ${isOwn ? 'right-0' : 'left-0'} flex items-center gap-1 bg-[var(--bg-elevated)] border border-[var(--border-primary)] rounded-full px-2 py-1 shadow-[var(--shadow)] z-30 animate-in fade-in zoom-in-95 duration-100`}>
                     {/* Reactions */}
                     <div className="flex items-center border-r border-[var(--border-primary)] pr-1 mr-1">
                       {REACTION_EMOJIS.map(emoji => (
