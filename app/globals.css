@@ -133,3 +133,32 @@ body {
   background: var(--accent-muted);
   color: var(--accent-text);
 }
+
+/* ===== Text Selection Control for Web App Feel ===== */
+body {
+  /* Prevent accidental selection on taps across the UI */
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* Allow text selection only on explicitly selectable content (like message bubble texts) */
+.selectable-text,
+p.break-words,
+span.break-words,
+input, 
+textarea {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+/* Disable touch callouts (e.g. system copy/paste callout on images or buttons) globally except for inputs and text */
+* {
+  -webkit-touch-callout: none;
+}
+.selectable-text, 
+p.break-words, 
+span.break-words, 
+input, 
+textarea {
+  -webkit-touch-callout: default !important;
+}
