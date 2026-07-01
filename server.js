@@ -15,15 +15,84 @@ const port = process.env.PORT || 3000;
 
 const rooms = new Map();
 
+const fs = require('fs');
+
+const storageDir = process.env.STORAGE_DIR || process.cwd();
+const roomsFilePath = path.join(storageDir, 'rooms.json');
+
+// Helper to save rooms to disk
+function saveRoomsToDisk() {
+  try {
+    const serialized = [];
+    for (const [roomId, room] of rooms.entries()) {
+      serialized.push({
+        id: roomId,
+        code: room.code,
+        name: room.name,
+        isPublic: room.isPublic,
+        creatorKey: room.creatorKey,
+        messages: room.messages || [],
+        members: room.members || {},
+        approvedUsers: room.approvedUsers ? Array.from(room.approvedUsers) : [],
+        lastActivity: room.lastActivity || Date.now()
+      });
+    }
+    fs.writeFileSync(roomsFilePath, JSON.stringify(serialized, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Failed to save rooms to disk', e);
+  }
+}
+
+let saveTimeout = null;
+function saveRoomsToDiskDebounced() {
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(saveRoomsToDisk, 1000);
+}
+
+// Helper to load rooms from disk
+function loadRoomsFromDisk() {
+  try {
+    if (fs.existsSync(roomsFilePath)) {
+      const data = fs.readFileSync(roomsFilePath, 'utf-8');
+      const serialized = JSON.parse(data);
+      for (const item of serialized) {
+        rooms.set(item.id, {
+          code: item.code,
+          name: item.name,
+          isPublic: item.isPublic,
+          creatorKey: item.creatorKey,
+          messages: item.messages || [],
+          members: item.members || {},
+          approvedUsers: new Set(item.approvedUsers || []),
+          users: {}, // Active socket users starts empty on launch
+          typingUsers: [],
+          lastActivity: item.lastActivity || Date.now()
+        });
+      }
+      console.log(`> Loaded ${rooms.size} rooms from persistent disk (${roomsFilePath})`);
+    }
+  } catch (e) {
+    console.error('Failed to load rooms from disk', e);
+  }
+}
+
+// Load initially on startup
+loadRoomsFromDisk();
+
 // Cleanup inactive rooms (no activity for more than 3 days)
 setInterval(() => {
   const now = Date.now();
   const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
+  let cleanedAny = false;
   for (const [roomId, room] of rooms.entries()) {
     if (room.lastActivity && (now - room.lastActivity > threeDaysMs)) {
       rooms.delete(roomId);
+      cleanedAny = true;
       console.log(`> Cleaned up inactive room: ${roomId}`);
     }
+  }
+  if (cleanedAny) {
+    saveRoomsToDiskDebounced();
   }
 }, 60 * 60 * 1000); // Check hourly
 
@@ -204,13 +273,10 @@ app.prepare().then(() => {
     socket.emit('public_rooms_update', getPublicRooms());
 
     socket.on('join_room', ({ roomId, name, isPublic, roomName, creatorKey, userKey }) => {
-      socket.join(roomId);
-      
       let room = rooms.get(roomId);
       if (!room) {
         if (!creatorKey) {
           socket.emit('room_error', { message: 'This room does not exist or has expired. Please create a new room from the dashboard.' });
-          socket.leave(roomId);
           return;
         }
         room = {
@@ -218,26 +284,58 @@ app.prepare().then(() => {
           name: roomName || 'Unnamed Room',
           isPublic: !!isPublic,
           users: {},
+          members: {},
+          approvedUsers: new Set([userKey]),
           messages: [],
           typingUsers: [],
           creatorKey: creatorKey,
           lastActivity: Date.now()
         };
         rooms.set(roomId, room);
+        saveRoomsToDiskDebounced();
       }
+
+      // Gate private rooms behind approval
+      if (!room.isPublic) {
+        const isRoomCreator = (!!room.creatorKey && !!creatorKey && room.creatorKey === creatorKey);
+        const isApproved = !!room.approvedUsers && room.approvedUsers.has(userKey);
+        console.log('[Access Check Debug]:', {
+          roomId,
+          roomIsPublic: room.isPublic,
+          isRoomCreator,
+          isApproved,
+          passedCreatorKey: creatorKey,
+          roomCreatorKey: room.creatorKey,
+          passedUserKey: userKey,
+          approvedUsers: room.approvedUsers ? Array.from(room.approvedUsers) : []
+        });
+        if (!isRoomCreator && !isApproved) {
+          socket.emit('require_approval', { roomName: room.name });
+          return;
+        }
+      }
+
+      socket.join(roomId);
       room.lastActivity = Date.now();
 
       let finalName = name;
       let isReconnection = false;
 
-      // Handle reconnection logic using persistent userKey
+      // Initialize members object if needed
+      room.members = room.members || {};
+
       if (userKey) {
-        const oldSocketId = Object.keys(room.users).find(sid => room.users[sid].userKey === userKey);
-        if (oldSocketId) {
-          finalName = room.users[oldSocketId].name;
-          delete room.users[oldSocketId];
+        // Reuse name if already a member
+        if (room.members[userKey]) {
+          finalName = room.members[userKey].name;
           isReconnection = true;
           console.log(`[Socket] Reconnected user ${finalName} in room ${roomId}`);
+        }
+        
+        // Clean up old session for the same userKey
+        const oldSocketId = Object.keys(room.users).find(sid => room.users[sid].userKey === userKey);
+        if (oldSocketId) {
+          delete room.users[oldSocketId];
         }
       }
 
@@ -251,14 +349,19 @@ app.prepare().then(() => {
         }
       }
 
-      // Add user to room
+      // Add user to active users map and update/add to members list
       room.users[socket.id] = { name: finalName, userKey };
+      room.members[userKey] = { name: finalName, online: true, userKey };
+
+      const getMembersList = () => {
+        return Object.values(room.members).map(m => ({ name: m.name, online: m.online }));
+      };
       
       // Let current client know their final resolved name and historical messages
       socket.emit('joined_info', { 
         name: finalName, 
         messages: room.messages, 
-        users: Object.values(room.users).map(u => u.name),
+        users: getMembersList(),
         roomName: room.name,
         isPublic: room.isPublic,
         isCreator: room.creatorKey === creatorKey
@@ -266,9 +369,9 @@ app.prepare().then(() => {
 
       // Notify others in room
       if (!isReconnection) {
-        socket.to(roomId).emit('user_joined', { name: finalName, users: Object.values(room.users).map(u => u.name) });
+        socket.to(roomId).emit('user_joined', { name: finalName, users: getMembersList() });
       } else {
-        io.to(roomId).emit('user_joined', { name: finalName, users: Object.values(room.users).map(u => u.name) });
+        io.to(roomId).emit('user_joined', { name: finalName, users: getMembersList() });
       }
       
       // Update public rooms listing if visibility is public
@@ -298,6 +401,7 @@ app.prepare().then(() => {
 
       room.messages.push(fullMessage);
       room.lastActivity = Date.now();
+      saveRoomsToDiskDebounced();
       
       // Broadcast to room
       io.to(roomId).emit('new_message', fullMessage);
@@ -352,6 +456,8 @@ app.prepare().then(() => {
         room.lastActivity = Date.now();
         io.to(roomId).emit('message_updated', msg);
       }
+
+      saveRoomsToDiskDebounced();
     });
 
     socket.on('update_room_details', ({ roomId, roomName, isPublic, creatorKey }) => {
@@ -372,6 +478,7 @@ app.prepare().then(() => {
       });
 
       broadcastPublicRooms();
+      saveRoomsToDiskDebounced();
     });
 
     socket.on('clear_chat', ({ roomId, creatorKey }) => {
@@ -381,6 +488,98 @@ app.prepare().then(() => {
       room.messages = [];
       room.lastActivity = Date.now();
       io.to(roomId).emit('chat_cleared');
+      saveRoomsToDiskDebounced();
+    });
+
+    socket.on('delete_room', ({ roomId, creatorKey }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      if (room.creatorKey !== creatorKey) return;
+      io.to(roomId).emit('room_deleted');
+      rooms.delete(roomId);
+      broadcastPublicRooms();
+      saveRoomsToDiskDebounced();
+    });
+
+    socket.on('change_name', ({ roomId, newName, userKey }) => {
+      const room = rooms.get(roomId);
+      if (!room || !newName || !newName.trim()) return;
+      const oldName = room.users[socket.id]?.name || 'Someone';
+      const cleanName = newName.trim();
+      
+      if (room.users[socket.id]) {
+        room.users[socket.id].name = cleanName;
+      }
+      if (room.members[userKey]) {
+        room.members[userKey].name = cleanName;
+      }
+      
+      const getMembersList = () => {
+        return Object.values(room.members || {}).map(m => ({ name: m.name, online: m.online }));
+      };
+      
+      io.to(roomId).emit('user_name_changed', { 
+        oldName, 
+        newName: cleanName, 
+        users: getMembersList() 
+      });
+      saveRoomsToDiskDebounced();
+    });
+
+    socket.on('request_join', ({ roomId, name, userKey }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+
+      const requestMsg = {
+        id: crypto.randomUUID(),
+        sender: '__system__',
+        content: `${name} has requested to join the chat.`,
+        type: 'join_request',
+        timestamp: new Date().toISOString(),
+        requesterName: name,
+        requesterUserKey: userKey,
+        requesterSocketId: socket.id,
+        delivered: true,
+        seen: true,
+        status: 'pending'
+      };
+
+      room.messages.push(requestMsg);
+      io.to(roomId).emit('new_message', requestMsg);
+      saveRoomsToDiskDebounced();
+    });
+
+    socket.on('approve_join', ({ roomId, messageId, requesterUserKey, requesterSocketId }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+
+      const msg = room.messages.find(m => m.id === messageId);
+      if (msg) {
+        msg.status = 'approved';
+        msg.content = `${msg.requesterName}'s join request was approved by the admin.`;
+        io.to(roomId).emit('message_updated', msg);
+      }
+
+      if (!room.approvedUsers) room.approvedUsers = new Set();
+      room.approvedUsers.add(requesterUserKey);
+
+      io.to(requesterSocketId).emit('join_approved');
+      saveRoomsToDiskDebounced();
+    });
+
+    socket.on('decline_join', ({ roomId, messageId, requesterSocketId, requesterName }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+
+      const msg = room.messages.find(m => m.id === messageId);
+      if (msg) {
+        msg.status = 'declined';
+        msg.content = `${msg.requesterName}'s join request was declined by the admin.`;
+        io.to(roomId).emit('message_updated', msg);
+      }
+
+      io.to(requesterSocketId).emit('join_declined');
+      saveRoomsToDiskDebounced();
     });
 
     socket.on('browser_init', async ({ roomId, width, height }) => {
@@ -501,12 +700,20 @@ app.prepare().then(() => {
           if (user) {
             delete room.users[socket.id];
             
+            // Mark member as offline
+            if (room.members && room.members[user.userKey]) {
+              room.members[user.userKey].online = false;
+            }
+            
             // Remove from typing list
             room.typingUsers = room.typingUsers.filter(u => u !== user.name);
             io.to(roomId).emit('typing_update', room.typingUsers);
 
             // Notify remaining users
-            socket.to(roomId).emit('user_left', { name: user.name, users: Object.values(room.users).map(u => u.name) });
+            const getMembersList = () => {
+              return Object.values(room.members || {}).map(m => ({ name: m.name, online: m.online }));
+            };
+            socket.to(roomId).emit('user_left', { name: user.name, users: getMembersList() });
           }
         }
       }
@@ -1000,6 +1207,12 @@ app.prepare().then(() => {
 
       return res.status(200).send(proxyErrorPage(targetUrl || '', 'The site could not be reached from the room browser. Try opening it in a new tab.'));
     }
+  });
+
+  // Check if room exists
+  expressApp.get('/api/check-room/:roomId', (req, res) => {
+    const exists = rooms.has(req.params.roomId);
+    return res.status(200).json({ exists });
   });
 
   // Serve uploaded files statically and dynamically at runtime

@@ -6,10 +6,11 @@ import { io, Socket } from 'socket.io-client';
 import {
   Send, Image as ImageIcon, Settings, Users, Copy, Check,
   ArrowLeft, Trash2, X, Download, Volume2, VolumeX,
-  Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video, Link2, Paperclip,
+  Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video, Link2, Paperclip, MoreVertical, MessageSquare,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import NextImage from 'next/image';
+import { motion } from 'framer-motion';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -19,17 +20,21 @@ interface Message {
   id: string;
   sender: string;
   content: string;
-  type: 'text' | 'image' | 'voice' | 'view_once_video' | 'video' | 'view_once_image';
+  type: 'text' | 'image' | 'voice' | 'view_once_video' | 'video' | 'view_once_image' | 'join_request';
   mediaUrl?: string;
   timestamp: string;
   delivered: boolean;
   seen: boolean;
+  status?: 'pending' | 'approved' | 'declined';
+  requesterName?: string;
+  requesterUserKey?: string;
+  requesterSocketId?: string;
   reactions?: { [username: string]: string };
   replyTo?: {
     id: string;
     sender: string;
     content: string;
-    type: 'text' | 'image' | 'voice' | 'view_once_video' | 'video' | 'view_once_image';
+    type: 'text' | 'image' | 'voice' | 'view_once_video' | 'video' | 'view_once_image' | 'join_request';
   };
 }
 
@@ -144,13 +149,15 @@ export default function ChatRoom() {
   const [displayName, setDisplayName]   = useState('');
   const [nameInput, setNameInput]       = useState('');
   const [hasName, setHasName]           = useState(false);
+  const [isMounted, setIsMounted]       = useState(false);
 
   /* ---- state: room ---- */
   const [roomName, setRoomName]     = useState('');
   const [isPublic, setIsPublic]     = useState(true);
   const [isCreator, setIsCreator]   = useState(false);
-  const [users, setUsers]           = useState<string[]>([]);
+  const [users, setUsers]           = useState<{ name: string; online: boolean }[]>([]);
   const [messages, setMessages]     = useState<Message[]>([]);
+  const [approvalStatus, setApprovalStatus] = useState<'none' | 'requesting' | 'pending' | 'approved' | 'declined'>('none');
 
   /* ---- state: input ---- */
   const [text, setText]             = useState('');
@@ -160,9 +167,13 @@ export default function ChatRoom() {
   /* ---- state: ui ---- */
   const [showMembers, setShowMembers]     = useState(false);
   const [showSettings, setShowSettings]   = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSearch, setShowSearch]       = useState(false);
+  const [showMenu, setShowMenu]           = useState(false);
   const [searchQuery, setSearchQuery]     = useState('');
   const [copiedLink, setCopiedLink]       = useState(false);
+  const [copiedCode, setCopiedCode]       = useState(false);
+  const [isJoining, setIsJoining]         = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [hoveredMsg, setHoveredMsg]       = useState<string | null>(null);
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
@@ -230,10 +241,14 @@ export default function ChatRoom() {
   /* ---------------------------------------------------------------- */
 
   useEffect(() => {
-    const savedName = localStorage.getItem('roomchat_display_name');
+    setIsMounted(true);
+    const roomSaved = localStorage.getItem(`roomchat_display_name_${roomId}`);
+    const globalSaved = localStorage.getItem('roomchat_display_name');
+    const savedName = roomSaved || globalSaved;
     if (savedName) {
       setDisplayName(savedName);
       setHasName(true);
+      setIsJoining(true);
     }
 
     const savedTheme = localStorage.getItem('roomchat_theme') as 'dark' | 'light' | null;
@@ -313,6 +328,13 @@ export default function ChatRoom() {
     }
   }, [notifEnabled]);
 
+  const cleanupRoomLocalStorage = useCallback((rid: string) => {
+    localStorage.removeItem(`room_creator_key_${rid}`);
+    localStorage.removeItem(`room_title_${rid}`);
+    localStorage.removeItem(`room_visibility_${rid}`);
+    localStorage.removeItem(`room_user_key_${rid}`);
+  }, []);
+
   /* ---------------------------------------------------------------- */
   /*  Auto-scroll                                                     */
   /* ---------------------------------------------------------------- */
@@ -357,16 +379,81 @@ export default function ChatRoom() {
       });
     });
 
-    socket.on('joined_info', (data: { name: string; messages: Message[]; users: string[]; roomName: string; isPublic: boolean; isCreator?: boolean }) => {
+    socket.on('joined_info', (data: { name: string; messages: Message[]; users: { name: string; online: boolean }[]; roomName: string; isPublic: boolean; isCreator?: boolean }) => {
+      setIsJoining(true);
+      setTimeout(() => {
+        setIsJoining(false);
+        if (data.users.length <= 1) {
+          confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 } });
+        }
+      }, 1500);
+
       setDisplayName(data.name);
       setMessages(data.messages);
       setUsers(data.users);
       setRoomName(data.roomName);
       setIsPublic(data.isPublic);
       setIsCreator(!!data.isCreator);
-      if (data.users.length <= 1) {
-        confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 } });
+      setApprovalStatus('approved');
+
+      // Save room to local storage joined list
+      try {
+        const list = JSON.parse(localStorage.getItem('roomchat_joined_rooms') || '[]');
+        const filtered = list.filter((r: { id: string }) => r.id !== roomId);
+        filtered.unshift({
+          id: roomId,
+          name: data.roomName,
+          visibility: data.isPublic ? 'public' : 'private',
+          joinedAt: new Date().toISOString()
+        });
+        localStorage.setItem('roomchat_joined_rooms', JSON.stringify(filtered.slice(0, 15)));
+      } catch (e) {
+        console.error('Failed to save to joined list', e);
       }
+    });
+
+    socket.on('user_name_changed', (data: { oldName: string; newName: string; users: { name: string; online: boolean }[] }) => {
+      setUsers(data.users);
+      const changeMsg: Message = {
+        id: Math.random().toString(36).substring(2),
+        sender: '__system__',
+        content: `"${data.oldName}" changed their display name to "${data.newName}".`,
+        timestamp: new Date().toISOString(),
+        type: 'text',
+        delivered: true,
+        seen: true
+      };
+      setMessages(prev => [...prev, changeMsg]);
+    });
+
+    socket.on('require_approval', (data: { roomName: string }) => {
+      setRoomName(data.roomName);
+      setApprovalStatus('requesting');
+    });
+
+    socket.on('join_approved', () => {
+      setApprovalStatus('approved');
+      const storedTitle = localStorage.getItem(`room_title_${roomId}`) || '';
+      const storedVisibility = localStorage.getItem(`room_visibility_${roomId}`) === 'public';
+      const storedCreatorKey = localStorage.getItem(`room_creator_key_${roomId}`) || '';
+      const userKey = localStorage.getItem(`room_user_key_${roomId}`) || '';
+      
+      socket.emit('join_room', { 
+        roomId, 
+        name: displayName, 
+        roomName: storedTitle, 
+        isPublic: storedVisibility,
+        creatorKey: storedCreatorKey,
+        userKey
+      });
+    });
+
+    socket.on('join_declined', () => {
+      setApprovalStatus('declined');
+    });
+
+    socket.on('message_updated', (updatedMsg: Message) => {
+      setMessages(prev => prev.map(m => m.id === updatedMsg.id ? updatedMsg : m));
     });
 
     socket.on('room_error', (data: { message: string }) => {
@@ -390,7 +477,7 @@ export default function ChatRoom() {
       setBrowserLoading(data.loading);
     });
 
-    socket.on('user_joined', (data: { name: string; users: string[] }) => {
+    socket.on('user_joined', (data: { name: string; users: { name: string; online: boolean }[] }) => {
       setUsers(data.users);
       const sysMsg: Message = {
         id: crypto.randomUUID(),
@@ -404,7 +491,7 @@ export default function ChatRoom() {
       setMessages(prev => [...prev, sysMsg]);
     });
 
-    socket.on('user_left', (data: { name: string; users: string[] }) => {
+    socket.on('user_left', (data: { name: string; users: { name: string; online: boolean }[] }) => {
       setUsers(data.users);
       const sysMsg: Message = {
         id: crypto.randomUUID(),
@@ -442,12 +529,17 @@ export default function ChatRoom() {
       setMessages([]);
     });
 
+    socket.on('room_deleted', () => {
+      cleanupRoomLocalStorage(roomId);
+      window.location.href = '/?error=room_deleted';
+    });
+
     return () => {
       socket.disconnect();
       hasJoinedRef.current = false;
       setIsSocketConnected(false);
     };
-  }, [hasName, displayName, roomId, playBeep, showNotification]);
+  }, [hasName, displayName, roomId, playBeep, showNotification, cleanupRoomLocalStorage]);
 
   /* ---------------------------------------------------------------- */
   /*  Typing indicator                                                */
@@ -812,6 +904,12 @@ export default function ChatRoom() {
     socketRef.current?.emit('clear_chat', { roomId, creatorKey });
   }, [roomId]);
 
+  const deleteRoom = useCallback(() => {
+    const creatorKey = localStorage.getItem(`room_creator_key_${roomId}`) || '';
+    cleanupRoomLocalStorage(roomId);
+    socketRef.current?.emit('delete_room', { roomId, creatorKey });
+  }, [roomId, cleanupRoomLocalStorage]);
+
   const updateRoomDetails = useCallback((newName: string, newVisibility: 'public' | 'private') => {
     const creatorKey = localStorage.getItem(`room_creator_key_${roomId}`) || '';
     socketRef.current?.emit('update_room_details', { 
@@ -832,6 +930,12 @@ export default function ChatRoom() {
     await navigator.clipboard.writeText(url);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
+  }, [roomId]);
+
+  const copyCode = useCallback(async () => {
+    await navigator.clipboard.writeText(roomId);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
   }, [roomId]);
 
   const handleBrowserClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -914,10 +1018,12 @@ export default function ChatRoom() {
   const handleSetName = useCallback(() => {
     const trimmed = nameInput.trim();
     if (!trimmed) return;
+    localStorage.setItem(`roomchat_display_name_${roomId}`, trimmed);
     localStorage.setItem('roomchat_display_name', trimmed);
     setDisplayName(trimmed);
     setHasName(true);
-  }, [nameInput]);
+    setIsJoining(true);
+  }, [nameInput, roomId]);
 
   /* ---------------------------------------------------------------- */
   /*  Pref toggles                                                    */
@@ -956,8 +1062,47 @@ export default function ChatRoom() {
   }, [sendMessage]);
 
   /* ================================================================ */
+  const sendJoinRequest = useCallback(() => {
+    const userKey = localStorage.getItem(`room_user_key_${roomId}`) || '';
+    socketRef.current?.emit('request_join', { roomId, name: displayName, userKey });
+    setApprovalStatus('pending');
+  }, [roomId, displayName]);
+
+  /* ================================================================ */
   /*  RENDER: Name prompt                                             */
   /* ================================================================ */
+
+  if (!isMounted) {
+    return (
+      <div 
+        className="min-h-screen flex flex-col items-center justify-center relative selection:bg-indigo-100 selection:text-indigo-900 bg-white"
+        style={{
+          backgroundImage: `
+            radial-gradient(#e5e7eb 1px, transparent 1px),
+            radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.05) 0%, transparent 60%)
+          `,
+          backgroundSize: '24px 24px, 100% 100%'
+        }}
+      >
+        <div className="flex flex-col items-center space-y-4">
+          <div className="p-3.5 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100 shadow-sm animate-bounce">
+            <MessageSquare size={36} />
+          </div>
+          <div className="text-center space-y-1">
+            <h1 className="text-2xl font-black tracking-tight text-gray-900">
+              RoomChat
+            </h1>
+            <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider animate-pulse">
+              Loading RoomChat...
+            </p>
+          </div>
+          <div className="pt-4">
+            <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!hasName) {
     return (
@@ -989,6 +1134,86 @@ export default function ChatRoom() {
     );
   }
 
+  if (approvalStatus === 'requesting' || approvalStatus === 'pending' || approvalStatus === 'declined') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)] p-4">
+        <div className="w-full max-w-sm bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-2xl p-6 text-center space-y-5">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-muted)] text-[var(--accent)] border border-[var(--border-primary)]">
+            <Lock size={20} />
+          </div>
+          
+          <div>
+            <h2 className="text-lg font-bold text-[var(--text-primary)] mb-1">
+              {approvalStatus === 'requesting' && 'Private Room Access'}
+              {approvalStatus === 'pending' && 'Awaiting Approval'}
+              {approvalStatus === 'declined' && 'Access Denied'}
+            </h2>
+            <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+              {approvalStatus === 'requesting' && `"${roomName || 'Unnamed Room'}" is private. You must request approval from the host to join.`}
+              {approvalStatus === 'pending' && 'Your request has been sent. Please wait while the administrator decides to accept or decline your access.'}
+              {approvalStatus === 'declined' && 'The administrator declined your request to join this private room.'}
+            </p>
+          </div>
+
+          {approvalStatus === 'pending' && (
+            <div className="flex justify-center py-2">
+              <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2 pt-2">
+            {approvalStatus === 'requesting' && (
+              <button
+                onClick={sendJoinRequest}
+                className="w-full py-2.5 rounded-xl bg-[var(--accent)] text-white font-medium hover:bg-[var(--accent-hover)] transition-colors cursor-pointer"
+              >
+                Request Access
+              </button>
+            )}
+            <button
+              onClick={() => window.location.href = '/'}
+              className="w-full py-2.5 rounded-xl border border-[var(--border-primary)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+            >
+              Return to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isJoining) {
+    return (
+      <div 
+        className="min-h-screen flex flex-col items-center justify-center relative selection:bg-indigo-100 selection:text-indigo-900 bg-white"
+        style={{
+          backgroundImage: `
+            radial-gradient(#e5e7eb 1px, transparent 1px),
+            radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.05) 0%, transparent 60%)
+          `,
+          backgroundSize: '24px 24px, 100% 100%'
+        }}
+      >
+        <div className="flex flex-col items-center space-y-4">
+          <div className="p-3.5 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100 shadow-sm animate-bounce">
+            <MessageSquare size={36} />
+          </div>
+          <div className="text-center space-y-1">
+            <h1 className="text-2xl font-black tracking-tight text-gray-900">
+              RoomChat
+            </h1>
+            <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider animate-pulse">
+              Entering Chat Room...
+            </p>
+          </div>
+          <div className="pt-4">
+            <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   /* ================================================================ */
   /*  RENDER: Canx disabled check                                     */
   /* ================================================================ */
@@ -1010,42 +1235,138 @@ export default function ChatRoom() {
       {/* =========================================================== */}
       {/*  HEADER                                                      */}
       {/* =========================================================== */}
-      <header className="flex items-center gap-2 px-3 py-2.5 bg-[var(--bg-secondary)] border-b border-[var(--border-primary)] shrink-0 z-20">
+      {/* Navigation Header */}
+      <header className="flex items-center gap-3 px-3 py-2 bg-[var(--bg-secondary)] border-b border-[var(--border-primary)] shrink-0 z-20">
         <button onClick={leaveRoom} className="p-1.5 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors">
-          <ArrowLeft size={20} />
+          <ArrowLeft size={18} />
         </button>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="text-sm font-semibold text-[var(--text-primary)] truncate">
+        <div className="flex-1 min-w-0 flex flex-col justify-center">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <h1 className="text-sm font-bold text-[var(--text-primary)] truncate">
               {roomName || 'Chat Room'}
             </h1>
-            <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border border-[var(--border-secondary)]">
-              {roomId}
-            </span>
-            <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium ${isPublic ? 'bg-[var(--success)]/15 text-[var(--success)]' : 'bg-[var(--accent-muted)] text-[var(--accent)]'}`}>
+            <span className={`shrink-0 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+              isPublic 
+                ? 'bg-emerald-50 border border-emerald-100 text-emerald-700' 
+                : 'bg-indigo-50 border border-indigo-100 text-indigo-700'
+            }`}>
               {isPublic ? 'Public' : 'Private'}
             </span>
           </div>
+          <button 
+            onClick={copyCode}
+            className="self-start text-[10px] text-[var(--text-tertiary)] hover:text-[var(--accent)] font-mono flex items-center gap-1 transition-colors mt-0.5 cursor-pointer"
+          >
+            <span>Code: <b>{roomId}</b></span>
+            {copiedCode ? (
+              <span className="text-[var(--success)] text-[9px] font-bold">✓ Copied!</span>
+            ) : (
+              <Copy size={9} />
+            )}
+          </button>
         </div>
 
-        <button onClick={() => setShowMembers(true)} className="flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors text-xs">
-          <Users size={15} />
-          <span>{users.length}</span>
-        </button>
-
-        <button onClick={() => setShowSearch(s => !s)} className={`p-1.5 rounded-lg hover:bg-[var(--bg-hover)] transition-colors ${showSearch ? 'text-[var(--accent)]' : 'text-[var(--text-secondary)]'}`}>
-          <Search size={18} />
-        </button>
-
-        <button onClick={copyLink} className="p-1.5 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors">
-          {copiedLink ? <Check size={18} className="text-[var(--success)]" /> : <Copy size={18} />}
-        </button>
-
-        <button onClick={() => setShowSettings(true)} className="p-1.5 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors">
-          <Settings size={18} />
+        <button 
+          onClick={() => setShowMenu(m => !m)} 
+          className={`p-1.5 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors cursor-pointer relative ${
+            showMenu ? 'text-[var(--accent)] bg-[var(--bg-hover)]' : ''
+          }`}
+        >
+          <MoreVertical size={18} />
         </button>
       </header>
+
+      {/* Dropdown Options Menu */}
+      <AnimatePresence>
+        {showMenu && (
+          <>
+            {/* Backdrop click closer */}
+            <div 
+              className="fixed inset-0 z-30" 
+              onClick={() => setShowMenu(false)} 
+            />
+            
+            {/* Dropdown Container */}
+            <motion.div
+              initial={{ opacity: 0, y: -10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              transition={{ duration: 0.15 }}
+              className="absolute right-3 top-14 w-64 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] shadow-xl z-40 p-2 flex flex-col gap-1"
+            >
+              <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--text-tertiary)] border-b border-[var(--border-secondary)] mb-1">
+                Room Details & Actions
+              </div>
+
+              {/* Live Count / Members List Button */}
+              <button 
+                onClick={() => {
+                  setShowMembers(true);
+                  setShowMenu(false);
+                }} 
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-[var(--bg-hover)] text-sm text-[var(--text-primary)] transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Users size={16} className="text-[var(--text-secondary)]" />
+                  <span>See Details & Members</span>
+                </div>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] font-semibold text-[var(--text-secondary)]">
+                  {users.length}
+                </span>
+              </button>
+
+              {/* Message Search Button */}
+              <button 
+                onClick={() => {
+                  setShowSearch(s => !s);
+                  setShowMenu(false);
+                }} 
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-[var(--bg-hover)] text-sm text-[var(--text-primary)] transition-colors cursor-pointer"
+              >
+                <Search size={16} className="text-[var(--text-secondary)]" />
+                <span>Search Messages</span>
+              </button>
+
+              {/* Share & Invite Option */}
+              <div className="border-t border-[var(--border-secondary)] my-1" />
+              
+              <div className="px-3 py-1.5 space-y-2">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-tertiary)]">
+                  Invite Link
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    readOnly
+                    value={typeof window !== 'undefined' ? `${window.location.origin}/chat/${roomId}` : ''}
+                    className="flex-1 text-[11px] font-mono px-2 py-1.5 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] outline-none"
+                  />
+                  <button
+                    onClick={copyLink}
+                    className="p-2 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer shrink-0"
+                  >
+                    {copiedLink ? <Check size={13} className="text-[var(--success)]" /> : <Copy size={13} />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="border-t border-[var(--border-secondary)] my-1" />
+
+              {/* Settings Action Button */}
+              <button 
+                onClick={() => {
+                  setShowSettings(true);
+                  setShowMenu(false);
+                }} 
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-[var(--bg-hover)] text-sm text-[var(--text-primary)] transition-colors cursor-pointer"
+              >
+                <Settings size={16} className="text-[var(--text-secondary)]" />
+                <span>Room Settings</span>
+              </button>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* =========================================================== */}
       {/*  SEARCH BAR                                                  */}
@@ -1073,10 +1394,76 @@ export default function ChatRoom() {
       {/* =========================================================== */}
       <div className={`flex-1 flex min-h-0 relative overflow-hidden ${showGoogleSearch ? 'flex-col md:flex-row' : 'flex-row'}`}>
         {/* Messages List */}
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-3 pt-10 pb-3 space-y-1.5 min-w-0">
+        <div 
+          ref={chatContainerRef} 
+          onClick={() => {
+            if (showSearch) {
+              setShowSearch(false);
+              setSearchQuery('');
+            }
+          }}
+          className="flex-1 overflow-y-auto px-3 pt-10 pb-3 space-y-1.5 min-w-0"
+        >
           {filteredMessages.map(msg => {
           const isOwn    = msg.sender === displayName;
           const isSystem = msg.sender === '__system__';
+
+          /* ---- join request message ---- */
+          if (msg.type === 'join_request') {
+            const isPending = msg.status === 'pending';
+            return (
+              <div key={msg.id} className="flex justify-center py-2">
+                <div className="max-w-sm w-full bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-xl p-4 shadow-sm text-center space-y-3">
+                  <div className="flex items-center justify-center gap-2 text-xs font-semibold text-[var(--text-primary)]">
+                    <Users size={14} className="text-[var(--accent)]" />
+                    <span>Join Request</span>
+                  </div>
+                  <p className="text-xs text-[var(--text-secondary)]">
+                    {msg.content}
+                  </p>
+                  {isCreator && isPending && (
+                    <div className="flex gap-2 justify-center">
+                      <button
+                        onClick={() => {
+                          socketRef.current?.emit('decline_join', {
+                            roomId,
+                            messageId: msg.id,
+                            requesterSocketId: msg.requesterSocketId,
+                            requesterName: msg.requesterName
+                          });
+                        }}
+                        className="px-3 py-1.5 rounded-lg border border-[var(--border-primary)] text-[10px] font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+                      >
+                        Decline
+                      </button>
+                      <button
+                        onClick={() => {
+                          socketRef.current?.emit('approve_join', {
+                            roomId,
+                            messageId: msg.id,
+                            requesterUserKey: msg.requesterUserKey,
+                            requesterSocketId: msg.requesterSocketId
+                          });
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[10px] font-semibold hover:bg-[var(--accent-hover)] transition-colors cursor-pointer"
+                      >
+                        Accept
+                      </button>
+                    </div>
+                  )}
+                  {!isPending && (
+                    <span className={`inline-block text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                      msg.status === 'approved' 
+                        ? 'bg-green-50 border border-green-100 text-green-700' 
+                        : 'bg-red-50 border border-red-100 text-red-700'
+                    }`}>
+                      {msg.status}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          }
 
           /* ---- system message ---- */
           if (isSystem) {
@@ -1854,17 +2241,52 @@ export default function ChatRoom() {
                   <X size={18} />
                 </button>
               </div>
-              <div className="flex-1 overflow-y-auto p-3 space-y-1">
-                {users.map(user => (
-                  <div key={user} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-[var(--bg-hover)] transition-colors">
-                    <div className="w-8 h-8 rounded-full bg-[var(--accent-muted)] flex items-center justify-center text-xs font-semibold text-[var(--accent)]">
-                      {user.charAt(0).toUpperCase()}
-                    </div>
-                    <span className="text-sm text-[var(--text-primary)] truncate">
-                      {user}{user === displayName && <span className="text-[var(--text-tertiary)]"> (you)</span>}
-                    </span>
+              <div className="flex-1 overflow-y-auto p-3 space-y-4">
+                {/* Online members */}
+                <div>
+                  <h3 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-tertiary)] px-3 mb-1">
+                    Online — {users.filter(u => u.online).length}
+                  </h3>
+                  <div className="space-y-0.5">
+                    {users.filter(u => u.online).map(user => (
+                      <div key={user.name} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-[var(--bg-hover)] transition-colors">
+                        <div className="relative">
+                          <div className="w-8 h-8 rounded-full bg-[var(--accent-muted)] flex items-center justify-center text-xs font-semibold text-[var(--accent)]">
+                            {user.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-[var(--bg-secondary)]" />
+                        </div>
+                        <span className="text-sm text-[var(--text-primary)] truncate">
+                          {user.name}{user.name === displayName && <span className="text-[var(--text-tertiary)]"> (you)</span>}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
+
+                {/* Offline members */}
+                {users.some(u => !u.online) && (
+                  <div>
+                    <h3 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-tertiary)] px-3 mb-1">
+                      Offline — {users.filter(u => !u.online).length}
+                    </h3>
+                    <div className="space-y-0.5">
+                      {users.filter(u => !u.online).map(user => (
+                        <div key={user.name} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-[var(--bg-hover)] transition-colors opacity-60">
+                          <div className="relative">
+                            <div className="w-8 h-8 rounded-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] flex items-center justify-center text-xs font-semibold text-[var(--text-secondary)]">
+                              {user.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-gray-300 rounded-full border-2 border-[var(--bg-secondary)]" />
+                          </div>
+                          <span className="text-sm text-[var(--text-primary)] truncate">
+                            {user.name}{user.name === displayName && <span className="text-[var(--text-tertiary)]"> (you)</span>}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </aside>
           </>
@@ -1892,6 +2314,26 @@ export default function ChatRoom() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-5">
+                {/* Nickname */}
+                <div className="px-3 py-1 space-y-1.5">
+                  <label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Your Nickname</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => {
+                        const newName = e.target.value;
+                        setDisplayName(newName);
+                        localStorage.setItem(`roomchat_display_name_${roomId}`, newName);
+                        localStorage.setItem('roomchat_display_name', newName);
+                        socketRef.current?.emit('change_name', { roomId, newName, userKey: localStorage.getItem(`room_user_key_${roomId}`) || '' });
+                      }}
+                      placeholder="Your name"
+                      maxLength={30}
+                      className="w-full text-sm px-3 py-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-colors"
+                    />
+                  </div>
+                </div>
                 {/* Sound */}
                 <button onClick={toggleSound} className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl hover:bg-[var(--bg-hover)] transition-colors">
                   <div className="flex items-center gap-3">
@@ -2016,6 +2458,20 @@ export default function ChatRoom() {
                   >
                     <Trash2 size={18} className="text-[var(--danger)]" />
                     <span className="text-sm text-[var(--danger)]">Clear Chat</span>
+                  </button>
+                )}
+
+                {/* Delete room */}
+                {isCreator && (
+                  <button
+                    onClick={() => {
+                      setShowDeleteConfirm(true);
+                      setShowSettings(false);
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[var(--danger-muted)] transition-colors cursor-pointer"
+                  >
+                    <Trash2 size={18} className="text-[var(--danger)]" />
+                    <span className="text-sm text-[var(--danger)]">Delete Room</span>
                   </button>
                 )}
 
@@ -2331,6 +2787,57 @@ export default function ChatRoom() {
                 )}
               </div>
             </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =========================================================== */}
+      {/*  DELETE CONFIRMATION MODAL                                  */}
+      {/* =========================================================== */}
+      <AnimatePresence>
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              onClick={() => setShowDeleteConfirm(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.2 }}
+              className="relative max-w-sm w-full bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-2xl overflow-hidden shadow-2xl z-10 flex flex-col p-6 gap-4 text-center"
+            >
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-red-600 border border-red-100">
+                <Trash2 size={22} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-[var(--text-primary)] mb-1">Delete Chat Room?</h3>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  This will immediately disconnect all active participants and permanently clear all messages. This action cannot be undone.
+                </p>
+              </div>
+              <div className="flex gap-3 mt-2">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-[var(--border-primary)] text-xs font-semibold text-[var(--text-secondary)] bg-[var(--bg-secondary)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    deleteRoom();
+                    setShowDeleteConfirm(false);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm cursor-pointer"
+                >
+                  Delete Room
+                </button>
+              </div>
+            </motion.div>
           </div>
         )}
       </AnimatePresence>
