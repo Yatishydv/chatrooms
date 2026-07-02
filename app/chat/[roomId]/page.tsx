@@ -343,92 +343,7 @@ export default function ChatRoom() {
     }, 100);
   }, []);
 
-  const handleTouchStart = useCallback((e: React.TouchEvent, msgId: string) => {
-    const touch = e.touches[0];
-    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
-    activeSwipeMsgIdRef.current = msgId;
-    isSwipingRef.current = false;
-    swipeOffsetRef.current = 0;
-  }, []);
 
-  const handleTouchMove = useCallback((e: React.TouchEvent, msgId: string, isOwn: boolean) => {
-    if (!touchStartRef.current || activeSwipeMsgIdRef.current !== msgId) return;
-    const touch = e.touches[0];
-    const deltaX = touch.clientX - touchStartRef.current.x;
-    const deltaY = touch.clientY - touchStartRef.current.y;
-
-    if (!isSwipingRef.current) {
-      if (Math.abs(deltaX) > Math.abs(deltaY) * 1.2 && Math.abs(deltaX) > 10) {
-        isSwipingRef.current = true;
-      } else if (Math.abs(deltaY) > 10) {
-        touchStartRef.current = null;
-        activeSwipeMsgIdRef.current = null;
-        return;
-      }
-    }
-
-    if (isSwipingRef.current) {
-      if (e.cancelable) e.preventDefault();
-      
-      let offset = 0;
-      if (isOwn) {
-        offset = Math.max(-75, Math.min(0, deltaX));
-      } else {
-        offset = Math.min(75, Math.max(0, deltaX));
-      }
-      
-      swipeOffsetRef.current = offset;
-
-      const el = document.getElementById(`bubble-container-${msgId}`);
-      if (el) {
-        el.style.transform = `translateX(${offset}px)`;
-        el.style.transition = 'none';
-      }
-
-      const indicator = document.getElementById(`reply-indicator-${msgId}`);
-      if (indicator) {
-        const threshold = 40;
-        const ratio = Math.min(1, Math.abs(offset) / threshold);
-        indicator.style.opacity = `${ratio}`;
-        indicator.style.transform = `scale(${ratio}) translateY(-50%)`;
-      }
-    }
-  }, []);
-
-  const handleTouchEnd = useCallback((e: React.TouchEvent, msg: Message) => {
-    const msgId = msg.id;
-    if (activeSwipeMsgIdRef.current === msgId && isSwipingRef.current) {
-      const threshold = 45;
-      const offset = Math.abs(swipeOffsetRef.current);
-      
-      if (offset >= threshold) {
-        setReplyingToMessage(msg);
-        replyingToMessageRef.current = msg;
-        
-        if (navigator.vibrate) {
-          navigator.vibrate(15);
-        }
-      }
-    }
-
-    const el = document.getElementById(`bubble-container-${msgId}`);
-    if (el) {
-      el.style.transform = 'translateX(0px)';
-      el.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
-    }
-
-    const indicator = document.getElementById(`reply-indicator-${msgId}`);
-    if (indicator) {
-      indicator.style.opacity = '0';
-      indicator.style.transform = 'scale(0) translateY(-50%)';
-      indicator.style.transition = 'all 0.25s ease';
-    }
-
-    touchStartRef.current = null;
-    activeSwipeMsgIdRef.current = null;
-    isSwipingRef.current = false;
-    swipeOffsetRef.current = 0;
-  }, []);
 
   /* ---------------------------------------------------------------- */
   /*  Theme / accent helpers                                          */
@@ -876,12 +791,39 @@ export default function ChatRoom() {
     setHoveredMsg(null);
   }, [roomId]);
 
-  const handleBubbleClick = useCallback((msgId: string) => {
+  const handleDoubleClick = useCallback((msgId: string) => {
+    reactToMessage(msgId, '❤️');
+
+    const bubble = document.getElementById(`bubble-content-${msgId}`);
+    if (bubble) {
+      const existing = bubble.querySelector('.heart-pop');
+      if (existing) existing.remove();
+
+      const heart = document.createElement('div');
+      heart.className = 'heart-pop absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-red-500 text-4xl select-none pointer-events-none z-10 animate-heart-pop';
+      heart.innerHTML = '❤️';
+      bubble.appendChild(heart);
+      setTimeout(() => heart.remove(), 750);
+    }
+  }, [reactToMessage]);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent, msgId: string) => {
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    activeSwipeMsgIdRef.current = msgId;
+    isSwipingRef.current = false;
+    swipeOffsetRef.current = 0;
+
+    // Mobile double tap handler
     const now = Date.now();
     const lastTap = lastTapRef.current[msgId] || 0;
     if (now - lastTap < 300) {
       reactToMessage(msgId, '❤️');
       lastTapRef.current[msgId] = 0;
+
+      if (navigator.vibrate) {
+        navigator.vibrate(15);
+      }
 
       const bubble = document.getElementById(`bubble-content-${msgId}`);
       if (bubble) {
@@ -898,6 +840,85 @@ export default function ChatRoom() {
       lastTapRef.current[msgId] = now;
     }
   }, [reactToMessage]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent, msgId: string, isOwn: boolean) => {
+    if (!touchStartRef.current || activeSwipeMsgIdRef.current !== msgId) return;
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - touchStartRef.current.x;
+    const deltaY = touch.clientY - touchStartRef.current.y;
+
+    if (!isSwipingRef.current) {
+      if (Math.abs(deltaX) > Math.abs(deltaY) * 1.2 && Math.abs(deltaX) > 10) {
+        isSwipingRef.current = true;
+      } else if (Math.abs(deltaY) > 10) {
+        touchStartRef.current = null;
+        activeSwipeMsgIdRef.current = null;
+        return;
+      }
+    }
+
+    if (isSwipingRef.current) {
+      if (e.cancelable) e.preventDefault();
+      
+      let offset = 0;
+      if (isOwn) {
+        offset = Math.max(-75, Math.min(0, deltaX));
+      } else {
+        offset = Math.min(75, Math.max(0, deltaX));
+      }
+      
+      swipeOffsetRef.current = offset;
+
+      const el = document.getElementById(`bubble-container-${msgId}`);
+      if (el) {
+        el.style.transform = `translateX(${offset}px)`;
+        el.style.transition = 'none';
+      }
+
+      const indicator = document.getElementById(`reply-indicator-${msgId}`);
+      if (indicator) {
+        const threshold = 40;
+        const ratio = Math.min(1, Math.abs(offset) / threshold);
+        indicator.style.opacity = `${ratio}`;
+        indicator.style.transform = `scale(${ratio}) translateY(-50%)`;
+      }
+    }
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent, msg: Message) => {
+    const msgId = msg.id;
+    if (activeSwipeMsgIdRef.current === msgId && isSwipingRef.current) {
+      const threshold = 45;
+      const offset = Math.abs(swipeOffsetRef.current);
+      
+      if (offset >= threshold) {
+        setReplyingToMessage(msg);
+        replyingToMessageRef.current = msg;
+        
+        if (navigator.vibrate) {
+          navigator.vibrate(15);
+        }
+      }
+    }
+
+    const el = document.getElementById(`bubble-container-${msgId}`);
+    if (el) {
+      el.style.transform = 'translateX(0px)';
+      el.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
+    }
+
+    const indicator = document.getElementById(`reply-indicator-${msgId}`);
+    if (indicator) {
+      indicator.style.opacity = '0';
+      indicator.style.transform = 'scale(0) translateY(-50%)';
+      indicator.style.transition = 'all 0.25s ease';
+    }
+
+    touchStartRef.current = null;
+    activeSwipeMsgIdRef.current = null;
+    isSwipingRef.current = false;
+    swipeOffsetRef.current = 0;
+  }, []);
 
   const handleGoogleSearch = useCallback(async (query: string, tab: 'all' | 'images' | 'videos' | 'news' = 'all') => {
     const trimmed = query.trim();
@@ -1725,7 +1746,7 @@ export default function ChatRoom() {
 
                 <div
                   id={`bubble-content-${msg.id}`}
-                  onClick={() => handleBubbleClick(msg.id)}
+                  onDoubleClick={() => handleDoubleClick(msg.id)}
                   className={`relative px-3 py-2 cursor-pointer select-none ${
                     isOwn
                       ? 'bg-[var(--bubble-own)] text-[var(--bubble-own-text)] rounded-2xl rounded-tr-sm'
