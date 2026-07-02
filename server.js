@@ -79,13 +79,13 @@ function loadRoomsFromDisk() {
 // Load initially on startup
 loadRoomsFromDisk();
 
-// Cleanup inactive rooms (no activity for more than 3 days)
+// Cleanup inactive rooms (no activity for more than 30 hours)
 setInterval(() => {
   const now = Date.now();
-  const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
+  const thirtyHoursMs = 30 * 60 * 60 * 1000;
   let cleanedAny = false;
   for (const [roomId, room] of rooms.entries()) {
-    if (room.lastActivity && (now - room.lastActivity > threeDaysMs)) {
+    if (room.lastActivity && (now - room.lastActivity > thirtyHoursMs)) {
       rooms.delete(roomId);
       cleanedAny = true;
       console.log(`> Cleaned up inactive room: ${roomId}`);

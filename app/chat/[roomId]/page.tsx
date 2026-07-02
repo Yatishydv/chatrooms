@@ -1487,6 +1487,19 @@ export default function ChatRoom() {
           }}
           className="flex-1 overflow-y-auto px-3 pt-10 pb-3 space-y-1.5 min-w-0"
         >
+          {/* Inactivity deletion warning banner */}
+          <div className="flex justify-center pb-2">
+            <div className="max-w-md w-full bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-center space-y-1">
+              <p className="text-xs font-semibold text-amber-600 flex items-center justify-center gap-1.5">
+                <span>⚠️</span>
+                <span>Active Lifetime Notice</span>
+              </p>
+              <p className="text-[10px] text-[var(--text-secondary)] font-medium leading-relaxed">
+                This room and all of its message history will be permanently deleted after 30 hours of inactivity.
+              </p>
+            </div>
+          </div>
+
           {filteredMessages.map(msg => {
           const isOwn    = msg.sender === displayName;
           const isSystem = msg.sender === '__system__';
