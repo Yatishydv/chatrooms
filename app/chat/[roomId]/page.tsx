@@ -179,6 +179,7 @@ export default function ChatRoom() {
   const [hoveredMsg, setHoveredMsg]       = useState<string | null>(null);
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
   const [editingMessage, setEditingMessage]   = useState<Message | null>(null);
+  const [viewportHeight, setViewportHeight]   = useState<string>('100dvh');
   const [showAllReactionsForMsg, setShowAllReactionsForMsg] = useState<string | null>(null);
   const [showGoogleSearch, setShowGoogleSearch] = useState(false);
   const [googleSearchQuery, setGoogleSearchQuery] = useState('');
@@ -297,6 +298,20 @@ export default function ChatRoom() {
     body.style.width = '100%';
     body.style.height = '100%';
 
+    const handleResize = () => {
+      if (window.visualViewport) {
+        setViewportHeight(`${window.visualViewport.height}px`);
+      }
+      window.scrollTo(0, 0);
+      document.body.scrollTop = 0;
+    };
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleResize);
+      window.visualViewport.addEventListener('scroll', handleResize);
+      handleResize();
+    }
+
     return () => {
       html.style.overflow = origHtmlOverflow;
       html.style.height = origHtmlHeight;
@@ -304,14 +319,22 @@ export default function ChatRoom() {
       body.style.position = origBodyPosition;
       body.style.width = origBodyWidth;
       body.style.height = origBodyHeight;
+
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleResize);
+        window.visualViewport.removeEventListener('scroll', handleResize);
+      }
     };
   }, []);
 
   const handleInputFocus = useCallback(() => {
     setTimeout(() => {
+      if (window.visualViewport) {
+        setViewportHeight(`${window.visualViewport.height}px`);
+      }
       window.scrollTo(0, 0);
       document.body.scrollTop = 0;
-    }, 80);
+    }, 100);
   }, []);
 
   /* ---------------------------------------------------------------- */
@@ -1287,7 +1310,8 @@ export default function ChatRoom() {
 
   return (
     <div
-      className="fixed inset-0 flex flex-col bg-[var(--bg-primary)] overflow-hidden"
+      style={{ height: viewportHeight }}
+      className="fixed top-0 left-0 right-0 flex flex-col bg-[var(--bg-primary)] overflow-hidden"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
