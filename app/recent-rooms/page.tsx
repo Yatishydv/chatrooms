@@ -63,13 +63,28 @@ export default function RecentRoomsPage() {
     
     const checkRooms = async () => {
       const statusMap: Record<string, boolean> = {};
+      let listUpdated = false;
+      const updatedList = [...joinedRooms];
+
       await Promise.all(
-        joinedRooms.map(async (room) => {
+        updatedList.map(async (room, idx) => {
           try {
             const res = await fetch(`/api/check-room/${room.id}`);
             if (res.ok) {
               const data = await res.json();
               statusMap[room.id] = data.exists;
+              
+              if (data.exists) {
+                const liveVisibility = data.isPublic ? 'public' : 'private';
+                if (room.visibility !== liveVisibility || room.name !== data.name) {
+                  updatedList[idx] = {
+                    ...room,
+                    visibility: liveVisibility,
+                    name: data.name
+                  };
+                  listUpdated = true;
+                }
+              }
             } else {
               statusMap[room.id] = false;
             }
@@ -78,7 +93,13 @@ export default function RecentRoomsPage() {
           }
         })
       );
+      
       setActiveRoomIds(statusMap);
+      
+      if (listUpdated) {
+        setJoinedRooms(updatedList);
+        localStorage.setItem('roomchat_joined_rooms', JSON.stringify(updatedList));
+      }
     };
 
     checkRooms();

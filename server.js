@@ -1225,8 +1225,11 @@ app.prepare().then(() => {
 
   // Check if room exists
   expressApp.get('/api/check-room/:roomId', (req, res) => {
-    const exists = rooms.has(req.params.roomId);
-    return res.status(200).json({ exists });
+    const room = rooms.get(req.params.roomId);
+    if (room) {
+      return res.status(200).json({ exists: true, isPublic: room.isPublic, name: room.name });
+    }
+    return res.status(200).json({ exists: false });
   });
 
   // Serve uploaded files statically and dynamically at runtime
