@@ -145,6 +145,10 @@ export default function ChatRoom() {
   const typingTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasJoinedRef    = useRef(false);
   const replyingToMessageRef = useRef<Message | null>(null);
+  const touchStartRef   = useRef<{ x: number; y: number } | null>(null);
+  const activeSwipeMsgIdRef = useRef<string | null>(null);
+  const swipeOffsetRef  = useRef<number>(0);
+  const isSwipingRef    = useRef<boolean>(false);
 
   /* ---- state: identity ---- */
   const [displayName, setDisplayName]   = useState('');
@@ -335,6 +339,93 @@ export default function ChatRoom() {
       window.scrollTo(0, 0);
       document.body.scrollTop = 0;
     }, 100);
+  }, []);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent, msgId: string) => {
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    activeSwipeMsgIdRef.current = msgId;
+    isSwipingRef.current = false;
+    swipeOffsetRef.current = 0;
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent, msgId: string, isOwn: boolean) => {
+    if (!touchStartRef.current || activeSwipeMsgIdRef.current !== msgId) return;
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - touchStartRef.current.x;
+    const deltaY = touch.clientY - touchStartRef.current.y;
+
+    if (!isSwipingRef.current) {
+      if (Math.abs(deltaX) > Math.abs(deltaY) * 1.2 && Math.abs(deltaX) > 10) {
+        isSwipingRef.current = true;
+      } else if (Math.abs(deltaY) > 10) {
+        touchStartRef.current = null;
+        activeSwipeMsgIdRef.current = null;
+        return;
+      }
+    }
+
+    if (isSwipingRef.current) {
+      if (e.cancelable) e.preventDefault();
+      
+      let offset = 0;
+      if (isOwn) {
+        offset = Math.max(-75, Math.min(0, deltaX));
+      } else {
+        offset = Math.min(75, Math.max(0, deltaX));
+      }
+      
+      swipeOffsetRef.current = offset;
+
+      const el = document.getElementById(`bubble-container-${msgId}`);
+      if (el) {
+        el.style.transform = `translateX(${offset}px)`;
+        el.style.transition = 'none';
+      }
+
+      const indicator = document.getElementById(`reply-indicator-${msgId}`);
+      if (indicator) {
+        const threshold = 40;
+        const ratio = Math.min(1, Math.abs(offset) / threshold);
+        indicator.style.opacity = `${ratio}`;
+        indicator.style.transform = `scale(${ratio}) translateY(-50%)`;
+      }
+    }
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent, msg: Message) => {
+    const msgId = msg.id;
+    if (activeSwipeMsgIdRef.current === msgId && isSwipingRef.current) {
+      const threshold = 45;
+      const offset = Math.abs(swipeOffsetRef.current);
+      
+      if (offset >= threshold) {
+        setReplyingToMessage(msg);
+        replyingToMessageRef.current = msg;
+        
+        if (navigator.vibrate) {
+          navigator.vibrate(15);
+        }
+      }
+    }
+
+    const el = document.getElementById(`bubble-container-${msgId}`);
+    if (el) {
+      el.style.transform = 'translateX(0px)';
+      el.style.transition = 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)';
+    }
+
+    const indicator = document.getElementById(`reply-indicator-${msgId}`);
+    if (indicator) {
+      indicator.style.opacity = '0';
+      indicator.style.transform = 'scale(0) translateY(-50%)';
+      indicator.style.transition = 'all 0.25s ease';
+    }
+
+    touchStartRef.current = null;
+    activeSwipeMsgIdRef.current = null;
+    isSwipingRef.current = false;
+    swipeOffsetRef.current = 0;
   }, []);
 
   /* ---------------------------------------------------------------- */
@@ -1577,11 +1668,28 @@ export default function ChatRoom() {
             <div
               key={msg.id}
               id={`msg-${msg.id}`}
-              className={`flex ${isOwn ? 'justify-end' : 'justify-start'} transition-colors duration-500`}
+              className={`flex ${isOwn ? 'justify-end' : 'justify-start'} transition-colors duration-500 relative touch-pan-y`}
               onMouseEnter={() => setHoveredMsg(msg.id)}
               onMouseLeave={() => setHoveredMsg(null)}
+              onTouchStart={(e) => handleTouchStart(e, msg.id)}
+              onTouchMove={(e) => handleTouchMove(e, msg.id, isOwn)}
+              onTouchEnd={(e) => handleTouchEnd(e, msg)}
             >
-              <div className={`relative max-w-[75%] sm:max-w-[65%] group`}>
+              {/* Swipe Reply Indicator */}
+              <div 
+                id={`reply-indicator-${msg.id}`}
+                className="absolute top-1/2 -translate-y-1/2 opacity-0 scale-0 pointer-events-none transition-all flex items-center justify-center p-1.5 rounded-full bg-[var(--bg-secondary)] border border-[var(--border-primary)] text-[var(--accent)] z-10"
+                style={{
+                  [isOwn ? 'right' : 'left']: '4px'
+                }}
+              >
+                <CornerUpLeft size={12} className={isOwn ? 'rotate-0' : 'scale-x-[-1]'} />
+              </div>
+
+              <div 
+                id={`bubble-container-${msg.id}`}
+                className="relative max-w-[75%] sm:max-w-[65%] group"
+              >
                 {/* sender name */}
                 {!isOwn && (
                   <p className="text-[11px] font-medium text-[var(--accent)] mb-0.5 ml-1">{msg.sender}</p>
