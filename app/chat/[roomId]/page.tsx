@@ -145,6 +145,7 @@ export default function ChatRoom() {
   const typingTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasJoinedRef    = useRef(false);
   const replyingToMessageRef = useRef<Message | null>(null);
+  const lastTapRef      = useRef<{ [msgId: string]: number }>({});
   const touchStartRef   = useRef<{ x: number; y: number } | null>(null);
   const activeSwipeMsgIdRef = useRef<string | null>(null);
   const swipeOffsetRef  = useRef<number>(0);
@@ -873,6 +874,29 @@ export default function ChatRoom() {
     socketRef.current?.emit('message_action', { roomId, messageId: msgId, action: 'react', reaction: emoji });
     setHoveredMsg(null);
   }, [roomId]);
+
+  const handleBubbleClick = useCallback((msgId: string) => {
+    const now = Date.now();
+    const lastTap = lastTapRef.current[msgId] || 0;
+    if (now - lastTap < 300) {
+      reactToMessage(msgId, '❤️');
+      lastTapRef.current[msgId] = 0;
+
+      const bubble = document.getElementById(`bubble-content-${msgId}`);
+      if (bubble) {
+        const existing = bubble.querySelector('.heart-pop');
+        if (existing) existing.remove();
+
+        const heart = document.createElement('div');
+        heart.className = 'heart-pop absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-red-500 text-4xl select-none pointer-events-none z-10 animate-heart-pop';
+        heart.innerHTML = '❤️';
+        bubble.appendChild(heart);
+        setTimeout(() => heart.remove(), 750);
+      }
+    } else {
+      lastTapRef.current[msgId] = now;
+    }
+  }, [reactToMessage]);
 
   const handleGoogleSearch = useCallback(async (query: string, tab: 'all' | 'images' | 'videos' | 'news' = 'all') => {
     const trimmed = query.trim();
@@ -1696,7 +1720,9 @@ export default function ChatRoom() {
                 )}
 
                 <div
-                  className={`relative px-3 py-2 ${
+                  id={`bubble-content-${msg.id}`}
+                  onClick={() => handleBubbleClick(msg.id)}
+                  className={`relative px-3 py-2 cursor-pointer select-none ${
                     isOwn
                       ? 'bg-[var(--bubble-own)] text-[var(--bubble-own-text)] rounded-2xl rounded-tr-sm'
                       : 'bg-[var(--bubble-other)] text-[var(--bubble-other-text)] rounded-2xl rounded-tl-sm'

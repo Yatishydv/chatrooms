@@ -162,3 +162,31 @@ input,
 textarea {
   -webkit-touch-callout: default !important;
 }
+
+/* ===== Instagram-style Heart Pop ===== */
+@keyframes heartPop {
+  0% {
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0;
+  }
+  15% {
+    transform: translate(-50%, -50%) scale(1.4) rotate(-5deg);
+    opacity: 0.95;
+  }
+  30% {
+    transform: translate(-50%, -50%) scale(1) rotate(5deg);
+    opacity: 1;
+  }
+  75% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+    filter: drop-shadow(0 4px 6px rgba(0,0,0,0.15));
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(0) translateY(-25px);
+    opacity: 0;
+  }
+}
+.animate-heart-pop {
+  animation: heartPop 0.75s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
