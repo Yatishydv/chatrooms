@@ -278,6 +278,42 @@ export default function ChatRoom() {
     if (savedNotif !== null) setNotifEnabled(savedNotif === 'true');
   }, []);
 
+  // Lock viewport on mount to prevent keyboard panning issues on mobile
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    
+    const origHtmlOverflow = html.style.overflow;
+    const origHtmlHeight = html.style.height;
+    const origBodyOverflow = body.style.overflow;
+    const origBodyPosition = body.style.position;
+    const origBodyWidth = body.style.width;
+    const origBodyHeight = body.style.height;
+    
+    html.style.overflow = 'hidden';
+    html.style.height = '100%';
+    body.style.overflow = 'hidden';
+    body.style.position = 'fixed';
+    body.style.width = '100%';
+    body.style.height = '100%';
+
+    return () => {
+      html.style.overflow = origHtmlOverflow;
+      html.style.height = origHtmlHeight;
+      body.style.overflow = origBodyOverflow;
+      body.style.position = origBodyPosition;
+      body.style.width = origBodyWidth;
+      body.style.height = origBodyHeight;
+    };
+  }, []);
+
+  const handleInputFocus = useCallback(() => {
+    setTimeout(() => {
+      window.scrollTo(0, 0);
+      document.body.scrollTop = 0;
+    }, 80);
+  }, []);
+
   /* ---------------------------------------------------------------- */
   /*  Theme / accent helpers                                          */
   /* ---------------------------------------------------------------- */
@@ -2210,6 +2246,7 @@ export default function ChatRoom() {
               value={text}
               onChange={e => handleTextChange(e.target.value)}
               onKeyDown={handleKeyDown}
+              onFocus={handleInputFocus}
               placeholder="Type a message…"
               className="w-full px-3.5 py-2 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-primary)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] outline-none focus:border-[var(--accent)] transition-colors"
             />
