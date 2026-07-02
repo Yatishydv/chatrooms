@@ -3,8 +3,8 @@
     "id": "NxEqxJ",
     "code": "NxEqxJ",
     "name": "🐼",
-    "isPublic": true,
-    "creatorKey": "restored-creator-key",
+    "isPublic": false,
+    "creatorKey": "Moon-Creator-Secret-Key",
     "messages": [
       {
         "id": "d574ad04-d6ec-4f9b-805e-0c0395f457ef",
