@@ -6,7 +6,7 @@ import { io, Socket } from 'socket.io-client';
 import {
   Send, Image as ImageIcon, Settings, Users, Copy, Check,
   ArrowLeft, Trash2, X, Download, Volume2, VolumeX,
-  Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video, Link2, Paperclip, MoreVertical, MessageSquare,
+  Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video, Link2, Paperclip, MoreVertical, MessageSquare, Pencil,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import NextImage from 'next/image';
@@ -29,6 +29,7 @@ interface Message {
   requesterName?: string;
   requesterUserKey?: string;
   requesterSocketId?: string;
+  isEdited?: boolean;
   reactions?: { [username: string]: string };
   replyTo?: {
     id: string;
@@ -177,6 +178,7 @@ export default function ChatRoom() {
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [hoveredMsg, setHoveredMsg]       = useState<string | null>(null);
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
+  const [editingMessage, setEditingMessage]   = useState<Message | null>(null);
   const [showAllReactionsForMsg, setShowAllReactionsForMsg] = useState<string | null>(null);
   const [showGoogleSearch, setShowGoogleSearch] = useState(false);
   const [googleSearchQuery, setGoogleSearchQuery] = useState('');
@@ -637,6 +639,27 @@ export default function ChatRoom() {
     const socket = socketRef.current;
     if (!socket || isSending) return;
 
+    if (editingMessage) {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      setIsSending(true);
+      try {
+        socket.emit('message_action', { 
+          roomId, 
+          messageId: editingMessage.id, 
+          action: 'edit', 
+          reaction: trimmed 
+        });
+        setText('');
+        setEditingMessage(null);
+      } catch (err) {
+        console.error('Failed to edit message:', err);
+      } finally {
+        setIsSending(false);
+      }
+      return;
+    }
+
     const replyToPayload = replyingToMessage ? {
       id: replyingToMessage.id,
       sender: replyingToMessage.sender,
@@ -684,7 +707,7 @@ export default function ChatRoom() {
     } finally {
       setIsSending(false);
     }
-  }, [text, selectedFile, roomId, uploadFile, clearFile, isTyping, emitTyping, replyingToMessage, isViewOnceChecked, isSending]);
+  }, [text, selectedFile, roomId, uploadFile, clearFile, isTyping, emitTyping, replyingToMessage, editingMessage, isViewOnceChecked, isSending]);
 
 
 
@@ -1228,7 +1251,7 @@ export default function ChatRoom() {
 
   return (
     <div
-      className="h-dvh flex flex-col bg-[var(--bg-primary)] relative overflow-hidden"
+      className="fixed inset-0 flex flex-col bg-[var(--bg-primary)] overflow-hidden"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
@@ -1622,8 +1645,9 @@ export default function ChatRoom() {
                   )}
 
                   {/* timestamp */}
-                  <p className={`text-[10px] mt-1 ${isOwn ? 'text-[var(--bubble-own-text)]/60' : 'text-[var(--bubble-other-text)]/60'} text-right`}>
-                    {formatTime(msg.timestamp)}
+                  <p className={`text-[10px] mt-1 ${isOwn ? 'text-[var(--bubble-own-text)]/60' : 'text-[var(--bubble-other-text)]/60'} text-right space-x-1`}>
+                    {msg.isEdited && <span className="text-[9px] opacity-75 font-semibold italic">(edited)</span>}
+                    <span>{formatTime(msg.timestamp)}</span>
                   </p>
                 </div>
 
@@ -1677,6 +1701,20 @@ export default function ChatRoom() {
                     >
                       <CornerUpLeft size={14} />
                     </button>
+
+                    {/* Edit button (Own only) */}
+                    {isOwn && msg.type === 'text' && (
+                      <button
+                        onClick={() => {
+                          setEditingMessage(msg);
+                          setText(msg.content);
+                        }}
+                        title="Edit"
+                        className="hover:bg-[var(--bg-hover)] rounded-full p-1.5 text-[var(--text-secondary)] hover:text-[var(--accent)] transition-colors cursor-pointer"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
 
                     {/* Delete button (Own only) */}
                     {isOwn && (
@@ -2120,6 +2158,29 @@ export default function ChatRoom() {
               onClick={() => {
                 setReplyingToMessage(null);
                 replyingToMessageRef.current = null;
+              }}
+              className="p-1 rounded-full hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] shrink-0 cursor-pointer"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Edit Preview */}
+        {editingMessage && (
+          <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-primary)] text-xs animate-in slide-in-from-bottom-2 duration-150">
+            <div className="flex flex-col gap-0.5 border-l-2 border-[var(--accent)] pl-2 min-w-0">
+              <span className="font-semibold text-[var(--accent)] text-[10px] uppercase tracking-wider">
+                Editing Message
+              </span>
+              <span className="truncate text-[var(--text-secondary)] text-[11px] max-w-[280px]">
+                {editingMessage.content}
+              </span>
+            </div>
+            <button 
+              onClick={() => {
+                setEditingMessage(null);
+                setText('');
               }}
               className="p-1 rounded-full hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] shrink-0 cursor-pointer"
             >

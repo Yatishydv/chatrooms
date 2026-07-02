@@ -455,6 +455,13 @@ app.prepare().then(() => {
         }
         room.lastActivity = Date.now();
         io.to(roomId).emit('message_updated', msg);
+      } else if (action === 'edit') {
+        if (msg.sender === user.name) {
+          msg.content = reaction;
+          msg.isEdited = true;
+          room.lastActivity = Date.now();
+          io.to(roomId).emit('message_updated', msg);
+        }
       }
 
       saveRoomsToDiskDebounced();
