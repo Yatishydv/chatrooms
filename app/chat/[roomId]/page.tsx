@@ -186,6 +186,7 @@ export default function ChatRoom() {
   const [editingMessage, setEditingMessage]   = useState<Message | null>(null);
   const [viewportHeight, setViewportHeight]   = useState<string>('100dvh');
   const [showAllReactionsForMsg, setShowAllReactionsForMsg] = useState<string | null>(null);
+  const [activeReactionTooltip, setActiveReactionTooltip]   = useState<{ msgId: string; emoji: string } | null>(null);
   const [showGoogleSearch, setShowGoogleSearch] = useState(false);
   const [googleSearchQuery, setGoogleSearchQuery] = useState('');
   const [googleSearchResults, setGoogleSearchResults] = useState<{
@@ -1599,6 +1600,9 @@ export default function ChatRoom() {
               setShowSearch(false);
               setSearchQuery('');
             }
+            if (activeReactionTooltip) {
+              setActiveReactionTooltip(null);
+            }
           }}
           className="flex-1 overflow-y-auto px-3 pt-10 pb-3 space-y-1.5 min-w-0"
         >
@@ -1866,11 +1870,35 @@ export default function ChatRoom() {
                         acc[emoji] = (acc[emoji] || 0) + 1;
                         return acc;
                       }, {}),
-                    ).map(([emoji, count]) => (
-                      <span key={emoji} className="text-xs bg-[var(--bg-tertiary)] rounded-full px-1.5 py-0.5 border border-[var(--border-secondary)]">
-                        {emoji} {count > 1 && count}
-                      </span>
-                    ))}
+                    ).map(([emoji, count]) => {
+                      const usersWhoReacted = Object.entries(msg.reactions || {})
+                        .filter(([_, emo]) => emo === emoji)
+                        .map(([user]) => user);
+                        
+                      const isTooltipActive = activeReactionTooltip?.msgId === msg.id && activeReactionTooltip?.emoji === emoji;
+                      
+                      return (
+                        <span 
+                          key={emoji} 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isTooltipActive) {
+                              setActiveReactionTooltip(null);
+                            } else {
+                              setActiveReactionTooltip({ msgId: msg.id, emoji });
+                            }
+                          }}
+                          className="relative text-xs bg-[var(--bg-tertiary)] rounded-full px-1.5 py-0.5 border border-[var(--border-secondary)] cursor-pointer select-none hover:bg-[var(--bg-hover)] transition-colors"
+                        >
+                          <span>{emoji} {count > 1 && count}</span>
+                          {isTooltipActive && (
+                            <div className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 bg-[var(--bg-elevated)] border border-[var(--border-primary)] rounded-lg py-1 px-2 text-[10px] font-semibold shadow-md whitespace-nowrap z-50 animate-in fade-in zoom-in-95 duration-100 text-[var(--text-primary)]">
+                              {usersWhoReacted.join(', ')}
+                            </div>
+                          )}
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
 
