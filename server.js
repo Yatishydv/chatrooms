@@ -598,6 +598,47 @@ app.prepare().then(() => {
       saveRoomsToDiskDebounced();
     });
 
+    /* --- Voice Call Signaling --- */
+    socket.on('voice_call_start', ({ roomId, isGroup }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      const user = room.users[socket.id];
+      if (!user) return;
+
+      socket.to(roomId).emit('incoming_voice_call', {
+        callerId: socket.id,
+        callerName: user.name,
+        isGroup: !!isGroup
+      });
+    });
+
+    socket.on('voice_call_signal', ({ targetId, signal }) => {
+      const roomUser = socket.id;
+      io.to(targetId).emit('voice_call_signal', {
+        senderId: roomUser,
+        signal
+      });
+    });
+
+    socket.on('voice_call_accept', ({ callerId }) => {
+      const roomUser = socket.id;
+      io.to(callerId).emit('voice_call_accepted', {
+        peerId: roomUser
+      });
+    });
+
+    socket.on('voice_call_reject', ({ callerId }) => {
+      io.to(callerId).emit('voice_call_rejected', {
+        peerId: socket.id
+      });
+    });
+
+    socket.on('voice_call_end', ({ roomId }) => {
+      socket.to(roomId).emit('voice_call_ended', {
+        peerId: socket.id
+      });
+    });
+
     socket.on('browser_init', async ({ roomId, width, height }) => {
       try {
         await getOrCreateBrowser(roomId, width, height);
@@ -724,6 +765,7 @@ app.prepare().then(() => {
             // Remove from typing list
             room.typingUsers = room.typingUsers.filter(u => u !== user.name);
             io.to(roomId).emit('typing_update', room.typingUsers);
+            socket.to(roomId).emit('voice_call_ended', { peerId: socket.id });
 
             // Notify remaining users
             const getMembersList = () => {

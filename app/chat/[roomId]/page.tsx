@@ -7,6 +7,7 @@ import {
   Send, Image as ImageIcon, Settings, Users, Copy, Check,
   ArrowLeft, Trash2, X, Download, Volume2, VolumeX,
   Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video, Link2, Paperclip, MoreVertical, MessageSquare, Pencil,
+  Phone, PhoneOff, Mic, MicOff, PhoneCall,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import NextImage from 'next/image';
@@ -238,6 +239,16 @@ export default function ChatRoom() {
   /* ---- state: typing ---- */
   const [typingUsers, setTypingUsers]     = useState<string[]>([]);
   const [isTyping, setIsTyping]           = useState(false);
+
+  /* ---- state: voice call ---- */
+  const [callState, setCallState] = useState<'idle' | 'calling' | 'incoming' | 'connected'>('idle');
+  const [incomingCaller, setIncomingCaller] = useState<{ id: string; name: string } | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [callDuration, setCallDuration] = useState(0);
+  const peerConnectionsRef = useRef<{ [peerId: string]: RTCPeerConnection }>({});
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteAudioRefs = useRef<{ [peerId: string]: HTMLAudioElement }>({});
+  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /* ---- state: prefs ---- */
   const [theme, setTheme]               = useState<'dark' | 'light'>('light');
@@ -603,12 +614,203 @@ export default function ChatRoom() {
       window.location.href = '/?error=room_deleted';
     });
 
+    /* --- Voice Call Socket Listeners --- */
+    socket.on('incoming_voice_call', (data: { callerId: string; callerName: string }) => {
+      setIncomingCaller({ id: data.callerId, name: data.callerName });
+      setCallState('incoming');
+    });
+
+    socket.on('voice_call_accepted', async (data: { peerId: string }) => {
+      setCallState('connected');
+      startCallTimer();
+      await createPeerConnection(data.peerId, true);
+    });
+
+    socket.on('voice_call_rejected', () => {
+      cleanupCall();
+      alert('Voice call was declined.');
+    });
+
+    socket.on('voice_call_ended', ({ peerId }: { peerId: string }) => {
+      if (peerConnectionsRef.current[peerId]) {
+        peerConnectionsRef.current[peerId].close();
+        delete peerConnectionsRef.current[peerId];
+      }
+      if (Object.keys(peerConnectionsRef.current).length === 0) {
+        cleanupCall();
+      }
+    });
+
+    socket.on('voice_call_signal', async (data: { senderId: string; signal: { sdp?: RTCSessionDescriptionInit; ice?: RTCIceCandidateInit } }) => {
+      let pc = peerConnectionsRef.current[data.senderId];
+      if (!pc) {
+        pc = await createPeerConnection(data.senderId, false);
+      }
+      if (data.signal.sdp) {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
+        if (data.signal.sdp.type === 'offer') {
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          socketRef.current?.emit('voice_call_signal', {
+            targetId: data.senderId,
+            signal: { sdp: pc.localDescription }
+          });
+        }
+      } else if (data.signal.ice) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(data.signal.ice));
+        } catch (e) {
+          console.error('Error adding ICE candidate', e);
+        }
+      }
+    });
+
     return () => {
+      cleanupCall();
       socket.disconnect();
       hasJoinedRef.current = false;
       setIsSocketConnected(false);
     };
   }, [hasName, displayName, roomId, playBeep, showNotification, cleanupRoomLocalStorage]);
+
+  /* ---------------------------------------------------------------- */
+  /*  Voice Call WebRTC Helper Functions                              */
+  /* ---------------------------------------------------------------- */
+
+  const startCallTimer = useCallback(() => {
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    setCallDuration(0);
+    callTimerRef.current = setInterval(() => {
+      setCallDuration(prev => prev + 1);
+    }, 1000);
+  }, []);
+
+  const getLocalAudioStream = async (): Promise<MediaStream | null> => {
+    if (localStreamRef.current) return localStreamRef.current;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStreamRef.current = stream;
+      return stream;
+    } catch (err) {
+      console.error('Microphone access error:', err);
+      alert('Could not access microphone. Please grant permission.');
+      return null;
+    }
+  };
+
+  const createPeerConnection = async (peerId: string, isInitiator: boolean): Promise<RTCPeerConnection> => {
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    });
+    peerConnectionsRef.current[peerId] = pc;
+
+    const localStream = await getLocalAudioStream();
+    if (localStream) {
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    }
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socketRef.current?.emit('voice_call_signal', {
+          targetId: peerId,
+          signal: { ice: event.candidate }
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      if (event.streams && event.streams[0]) {
+        let audioEl = remoteAudioRefs.current[peerId];
+        if (!audioEl) {
+          audioEl = new Audio();
+          audioEl.autoplay = true;
+          remoteAudioRefs.current[peerId] = audioEl;
+        }
+        audioEl.srcObject = event.streams[0];
+      }
+    };
+
+    if (isInitiator) {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socketRef.current?.emit('voice_call_signal', {
+        targetId: peerId,
+        signal: { sdp: pc.localDescription }
+      });
+    }
+
+    return pc;
+  };
+
+  const initiateVoiceCall = async () => {
+    const stream = await getLocalAudioStream();
+    if (!stream) return;
+    setCallState('calling');
+    socketRef.current?.emit('voice_call_start', { roomId });
+  };
+
+  const acceptVoiceCall = async () => {
+    if (!incomingCaller) return;
+    const stream = await getLocalAudioStream();
+    if (!stream) return;
+    setCallState('connected');
+    startCallTimer();
+    socketRef.current?.emit('voice_call_accept', { callerId: incomingCaller.id });
+    await createPeerConnection(incomingCaller.id, false);
+  };
+
+  const rejectVoiceCall = () => {
+    if (incomingCaller) {
+      socketRef.current?.emit('voice_call_reject', { callerId: incomingCaller.id });
+    }
+    cleanupCall();
+  };
+
+  const toggleMute = () => {
+    if (localStreamRef.current) {
+      const audioTrack = localStreamRef.current.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMuted(!audioTrack.enabled);
+      }
+    }
+  };
+
+  const cleanupCall = () => {
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
+    peerConnectionsRef.current = {};
+    Object.values(remoteAudioRefs.current).forEach(audio => {
+      audio.pause();
+      audio.srcObject = null;
+    });
+    remoteAudioRefs.current = {};
+    setCallState('idle');
+    setIncomingCaller(null);
+    setIsMuted(false);
+    setCallDuration(0);
+  };
+
+  const endVoiceCall = () => {
+    socketRef.current?.emit('voice_call_end', { roomId });
+    cleanupCall();
+  };
+
+  const formatDuration = (sec: number) => {
+    const mins = Math.floor(sec / 60);
+    const secs = sec % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
 
   /* ---------------------------------------------------------------- */
   /*  Typing indicator                                                */
@@ -1487,6 +1689,21 @@ export default function ChatRoom() {
           </button>
         </div>
 
+        {/* Voice Call Button */}
+        <button
+          onClick={initiateVoiceCall}
+          disabled={callState !== 'idle'}
+          title="Start Voice Call"
+          className={`p-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
+            callState !== 'idle'
+              ? 'bg-emerald-500 text-white animate-pulse'
+              : 'hover:bg-[var(--bg-hover)] text-emerald-600 border border-emerald-200/50 bg-emerald-50/50'
+          }`}
+        >
+          <Phone size={18} />
+          <span className="text-xs font-semibold hidden sm:inline">Voice Call</span>
+        </button>
+
         <button 
           onClick={() => setShowMenu(m => !m)} 
           className={`p-1.5 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] transition-colors cursor-pointer relative ${
@@ -1496,6 +1713,85 @@ export default function ChatRoom() {
           <MoreVertical size={18} />
         </button>
       </header>
+
+      {/* Voice Call Overlay / Modals */}
+      {callState === 'calling' && (
+        <div className="bg-indigo-600 text-white px-4 py-2.5 flex items-center justify-between shadow-md z-30 animate-pulse">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <PhoneCall className="animate-bounce" size={18} />
+            <span>Calling room members...</span>
+          </div>
+          <button
+            onClick={endVoiceCall}
+            className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+          >
+            <PhoneOff size={14} />
+            Cancel Call
+          </button>
+        </div>
+      )}
+
+      {callState === 'incoming' && incomingCaller && (
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-3 flex items-center justify-between shadow-lg z-40 animate-bounce">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-full">
+              <PhoneCall size={20} />
+            </div>
+            <div>
+              <div className="text-sm font-bold">{incomingCaller.name}</div>
+              <div className="text-xs text-emerald-100">Incoming Voice Call...</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={acceptVoiceCall}
+              className="px-3.5 py-1.5 bg-white text-emerald-700 hover:bg-emerald-50 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+            >
+              <Phone size={14} />
+              Accept
+            </button>
+            <button
+              onClick={rejectVoiceCall}
+              className="px-3.5 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+            >
+              <PhoneOff size={14} />
+              Decline
+            </button>
+          </div>
+        </div>
+      )}
+
+      {callState === 'connected' && (
+        <div className="bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between shadow-md z-30 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+            <span className="text-xs font-bold tracking-wide uppercase text-emerald-400">Voice Call Active</span>
+            <span className="text-xs font-mono text-slate-300 font-semibold bg-slate-800 px-2 py-0.5 rounded-md">
+              {formatDuration(callDuration)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleMute}
+              className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
+                isMuted
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+              }`}
+            >
+              {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
+              <span className="hidden sm:inline">{isMuted ? 'Unmute' : 'Mute'}</span>
+            </button>
+            <button
+              onClick={endVoiceCall}
+              className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+            >
+              <PhoneOff size={14} />
+              End Call
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Dropdown Options Menu */}
       <AnimatePresence>
