@@ -878,14 +878,20 @@ export default function ChatRoom() {
 
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
-          Object.values(peerConnectionsRef.current).forEach(pc => {
+          for (const [peerId, pc] of Object.entries(peerConnectionsRef.current)) {
             const sender = pc.getSenders().find(s => s.track?.kind === 'video');
             if (sender) {
-              sender.replaceTrack(videoTrack);
+              await sender.replaceTrack(videoTrack);
             } else {
               pc.addTrack(videoTrack, stream);
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              socketRef.current?.emit('voice_call_signal', {
+                targetId: peerId,
+                signal: { sdp: pc.localDescription }
+              });
             }
-          });
+          }
 
           videoTrack.onended = () => {
             setIsScreenSharing(false);
@@ -916,14 +922,20 @@ export default function ChatRoom() {
 
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
-          Object.values(peerConnectionsRef.current).forEach(pc => {
+          for (const [peerId, pc] of Object.entries(peerConnectionsRef.current)) {
             const sender = pc.getSenders().find(s => s.track?.kind === 'video');
             if (sender) {
-              sender.replaceTrack(videoTrack);
+              await sender.replaceTrack(videoTrack);
             } else {
               pc.addTrack(videoTrack, stream);
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              socketRef.current?.emit('voice_call_signal', {
+                targetId: peerId,
+                signal: { sdp: pc.localDescription }
+              });
             }
-          });
+          }
         }
       } catch (err) {
         console.error('Camera access error:', err);
