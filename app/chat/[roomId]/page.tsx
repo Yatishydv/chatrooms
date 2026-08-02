@@ -2058,9 +2058,10 @@ export default function ChatRoom() {
                 </div>
               )}
 
-              {/* Media Video View (Only displayed when Camera is explicitly ON or Screen Share is ACTIVE) */}
+              {/* Media Video View (Google Meet / Discord Style Grid & Floating PIP) */}
               {remoteVideoStream || isScreenSharing || isCameraOn ? (
-                <div className="w-full flex-1 min-h-[260px] rounded-2xl bg-black/90 border border-slate-800 relative overflow-hidden flex items-center justify-center z-10 shadow-inner group">
+                <div className="w-full flex-1 min-h-[340px] rounded-2xl bg-slate-950 border border-slate-800 relative overflow-hidden flex items-center justify-center z-10 shadow-2xl group">
+                  {/* Main Display: Remote Stream if present, else Local active Stream */}
                   {remoteVideoStream ? (
                     <video
                       ref={el => {
@@ -2071,7 +2072,7 @@ export default function ChatRoom() {
                       }}
                       autoPlay
                       playsInline
-                      className="w-full h-full object-contain"
+                      className="w-full h-full object-contain bg-black"
                     />
                   ) : (
                     <video
@@ -2085,40 +2086,63 @@ export default function ChatRoom() {
                       autoPlay
                       playsInline
                       muted
-                      className="w-full h-full object-contain"
+                      className="w-full h-full object-contain bg-black"
                     />
                   )}
 
-                  {/* Size Manual Control Controls (Normal, Large, Fullscreen) */}
-                  <div className="absolute top-2 left-2 flex items-center gap-1 bg-slate-900/80 backdrop-blur-md p-1 rounded-xl border border-slate-800 z-20">
+                  {/* Floating Picture-in-Picture (PIP) for Local Camera/Screen Share when remote stream is also live */}
+                  {remoteVideoStream && (isCameraOn || isScreenSharing) && (
+                    <div className="absolute bottom-3 right-3 w-40 sm:w-48 aspect-video rounded-xl bg-slate-900/90 border border-slate-700/80 shadow-2xl overflow-hidden z-30 flex items-center justify-center">
+                      <video
+                        ref={el => {
+                          localVideoRef.current = el;
+                          const activeStream = screenStreamRef.current || cameraStreamRef.current;
+                          if (el && activeStream) {
+                            el.srcObject = activeStream;
+                          }
+                        }}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute bottom-1 left-1 bg-slate-900/90 px-1.5 py-0.5 rounded text-[9px] font-bold text-slate-200">
+                        {isScreenSharing ? 'You (Screen)' : 'You'}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Size Manual Control Controls (Default, Large, Theatre) */}
+                  <div className="absolute top-3 left-3 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/80 z-20 shadow-lg">
                     <button
                       onClick={() => setMediaDisplaySize('normal')}
-                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
-                        mediaDisplaySize === 'normal' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        mediaDisplaySize === 'normal' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                       }`}
                     >
                       Default
                     </button>
                     <button
                       onClick={() => setMediaDisplaySize('large')}
-                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
-                        mediaDisplaySize === 'large' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        mediaDisplaySize === 'large' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                       }`}
                     >
                       Large
                     </button>
                     <button
                       onClick={() => setMediaDisplaySize('full')}
-                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
-                        mediaDisplaySize === 'full' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        mediaDisplaySize === 'full' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                       }`}
                     >
                       Theatre
                     </button>
                   </div>
 
-                  <div className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md px-2.5 py-0.5 rounded-full text-[10px] font-semibold text-slate-300 border border-slate-700">
-                    {remoteVideoStream ? (remoteStreamPeerName || 'Participant Video Stream') : isScreenSharing ? 'Your Screen Share' : 'Your Camera'}
+                  {/* Stream Label Badge */}
+                  <div className="absolute bottom-3 left-3 bg-slate-900/90 backdrop-blur-md px-3 py-1 rounded-full text-xs font-bold text-slate-200 border border-slate-700 shadow-md">
+                    {remoteVideoStream ? (remoteStreamPeerName || 'Participant Screen / Video') : isScreenSharing ? 'Your Screen Share' : 'Your Camera'}
                   </div>
                 </div>
               ) : (
