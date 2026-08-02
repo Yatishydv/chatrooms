@@ -7,7 +7,7 @@ import {
   Send, Image as ImageIcon, Settings, Users, Copy, Check,
   ArrowLeft, Trash2, X, Download, Volume2, VolumeX,
   Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video, Link2, Paperclip, MoreVertical, MessageSquare, Pencil,
-  Phone, PhoneOff, Mic, MicOff, PhoneCall,
+  Phone, PhoneOff, Mic, MicOff, PhoneCall, Minimize2, Maximize2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import NextImage from 'next/image';
@@ -244,6 +244,8 @@ export default function ChatRoom() {
   const [callState, setCallState] = useState<'idle' | 'calling' | 'incoming' | 'connected'>('idle');
   const [incomingCaller, setIncomingCaller] = useState<{ id: string; name: string } | null>(null);
   const [isMuted, setIsMuted] = useState(false);
+  const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+  const [isCallMinimized, setIsCallMinimized] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const peerConnectionsRef = useRef<{ [peerId: string]: RTCPeerConnection }>({});
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -374,13 +376,16 @@ export default function ChatRoom() {
   }, []);
 
   /* ---------------------------------------------------------------- */
-  /*  Sound helper (Web Audio API beep)                               */
+  /*  Sound helpers                                                   */
   /* ---------------------------------------------------------------- */
+
+  const ringtoneIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const playBeep = useCallback(() => {
     if (!soundEnabled) return;
     try {
-      const ctx = new AudioContext();
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new AudioContextClass();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -392,6 +397,49 @@ export default function ChatRoom() {
       osc.stop(ctx.currentTime + 0.12);
     } catch { /* ignore */ }
   }, [soundEnabled]);
+
+  const startRingtone = useCallback(() => {
+    if (ringtoneIntervalRef.current) return;
+    const playTonePair = () => {
+      try {
+        const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextClass) return;
+        const ctx = new AudioContextClass();
+        
+        // Classic pleasant phone ringtone (440Hz + 480Hz duo chord)
+        const osc1 = ctx.createOscillator();
+        const osc2 = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc1.type = 'sine';
+        osc2.type = 'sine';
+        osc1.frequency.value = 440;
+        osc2.frequency.value = 480;
+
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+
+        osc1.connect(gain);
+        osc2.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc1.start(ctx.currentTime);
+        osc2.start(ctx.currentTime);
+        osc1.stop(ctx.currentTime + 1.2);
+        osc2.stop(ctx.currentTime + 1.2);
+      } catch { /* ignore */ }
+    };
+
+    playTonePair();
+    ringtoneIntervalRef.current = setInterval(playTonePair, 2400);
+  }, []);
+
+  const stopRingtone = useCallback(() => {
+    if (ringtoneIntervalRef.current) {
+      clearInterval(ringtoneIntervalRef.current);
+      ringtoneIntervalRef.current = null;
+    }
+  }, []);
 
   /* ---------------------------------------------------------------- */
   /*  Browser notification                                            */
@@ -618,9 +666,12 @@ export default function ChatRoom() {
     socket.on('incoming_voice_call', (data: { callerId: string; callerName: string }) => {
       setIncomingCaller({ id: data.callerId, name: data.callerName });
       setCallState('incoming');
+      startRingtone();
+      showNotification('Incoming Voice Call', `${data.callerName} is calling you in ${roomName || 'Chat Room'}`);
     });
 
     socket.on('voice_call_accepted', async (data: { peerId: string }) => {
+      stopRingtone();
       setCallState('connected');
       startCallTimer();
       await createPeerConnection(data.peerId, true);
@@ -628,7 +679,6 @@ export default function ChatRoom() {
 
     socket.on('voice_call_rejected', () => {
       cleanupCall();
-      alert('Voice call was declined.');
     });
 
     socket.on('voice_call_ended', ({ peerId }: { peerId: string }) => {
@@ -754,6 +804,7 @@ export default function ChatRoom() {
 
   const acceptVoiceCall = async () => {
     if (!incomingCaller) return;
+    stopRingtone();
     const stream = await getLocalAudioStream();
     if (!stream) return;
     setCallState('connected');
@@ -779,7 +830,16 @@ export default function ChatRoom() {
     }
   };
 
+  const toggleSpeaker = () => {
+    const nextSpeakerState = !isSpeakerMuted;
+    setIsSpeakerMuted(nextSpeakerState);
+    Object.values(remoteAudioRefs.current).forEach(audio => {
+      audio.muted = nextSpeakerState;
+    });
+  };
+
   const cleanupCall = () => {
+    stopRingtone();
     if (callTimerRef.current) {
       clearInterval(callTimerRef.current);
       callTimerRef.current = null;
@@ -798,6 +858,8 @@ export default function ChatRoom() {
     setCallState('idle');
     setIncomingCaller(null);
     setIsMuted(false);
+    setIsSpeakerMuted(false);
+    setIsCallMinimized(false);
     setCallDuration(0);
   };
 
@@ -1714,83 +1776,202 @@ export default function ChatRoom() {
         </button>
       </header>
 
-      {/* Voice Call Overlay / Modals */}
-      {callState === 'calling' && (
-        <div className="bg-indigo-600 text-white px-4 py-2.5 flex items-center justify-between shadow-md z-30 animate-pulse">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <PhoneCall className="animate-bounce" size={18} />
-            <span>Calling room members...</span>
-          </div>
-          <button
-            onClick={endVoiceCall}
-            className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+      {/* Voice Call Floating Glassmorphism Modal / Floating Widget */}
+      {callState !== 'idle' && (
+        isCallMinimized ? (
+          /* Minimized Floating Floating Call Widget - Non-blocking overlay */
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8, y: -20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.8, y: -20 }}
+            className="fixed top-14 right-4 z-40 bg-slate-900/95 border border-slate-800 text-white rounded-full px-4 py-2 shadow-2xl backdrop-blur-xl flex items-center gap-3 cursor-pointer hover:bg-slate-800/95 transition-all"
+            onClick={() => setIsCallMinimized(false)}
           >
-            <PhoneOff size={14} />
-            Cancel Call
-          </button>
-        </div>
-      )}
-
-      {callState === 'incoming' && incomingCaller && (
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-3 flex items-center justify-between shadow-lg z-40 animate-bounce">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-white/20 rounded-full">
-              <PhoneCall size={20} />
+            <div className="relative">
+              <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">
+                <Phone size={14} className="animate-pulse" />
+              </div>
+              <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-400 rounded-full border-2 border-slate-900 animate-ping" />
             </div>
-            <div>
-              <div className="text-sm font-bold">{incomingCaller.name}</div>
-              <div className="text-xs text-emerald-100">Incoming Voice Call...</div>
+            
+            <div className="flex flex-col text-left">
+              <span className="text-xs font-bold text-slate-100 flex items-center gap-1.5">
+                {callState === 'connected' ? formatDuration(callDuration) : callState === 'incoming' ? 'Incoming...' : 'Ringing...'}
+              </span>
+              <span className="text-[10px] text-slate-400 font-medium">Click to expand</span>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={acceptVoiceCall}
-              className="px-3.5 py-1.5 bg-white text-emerald-700 hover:bg-emerald-50 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
-            >
-              <Phone size={14} />
-              Accept
-            </button>
-            <button
-              onClick={rejectVoiceCall}
-              className="px-3.5 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
-            >
-              <PhoneOff size={14} />
-              Decline
-            </button>
-          </div>
-        </div>
-      )}
 
-      {callState === 'connected' && (
-        <div className="bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between shadow-md z-30 border-b border-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-            <span className="text-xs font-bold tracking-wide uppercase text-emerald-400">Voice Call Active</span>
-            <span className="text-xs font-mono text-slate-300 font-semibold bg-slate-800 px-2 py-0.5 rounded-md">
-              {formatDuration(callDuration)}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={toggleMute}
-              className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
-                isMuted
-                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                  : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
-              }`}
+            <div className="flex items-center gap-1 ml-1" onClick={e => e.stopPropagation()}>
+              <button
+                onClick={toggleMute}
+                className={`p-1.5 rounded-full transition-colors ${isMuted ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                title={isMuted ? 'Unmute' : 'Mute'}
+              >
+                {isMuted ? <MicOff size={14} /> : <Mic size={14} />}
+              </button>
+              <button
+                onClick={endVoiceCall}
+                className="p-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-full transition-colors"
+                title="End Call"
+              >
+                <PhoneOff size={14} />
+              </button>
+              <button
+                onClick={() => setIsCallMinimized(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-full transition-colors"
+                title="Maximize Call Window"
+              >
+                <Maximize2 size={14} />
+              </button>
+            </div>
+          </motion.div>
+        ) : (
+          /* Fullscreen Glassmorphism Call Modal Overlay */
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="w-full max-w-sm rounded-3xl bg-slate-900/95 border border-slate-800 shadow-2xl p-6 text-center text-white backdrop-blur-xl flex flex-col items-center gap-5 relative overflow-hidden"
             >
-              {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
-              <span className="hidden sm:inline">{isMuted ? 'Unmute' : 'Mute'}</span>
-            </button>
-            <button
-              onClick={endVoiceCall}
-              className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
-            >
-              <PhoneOff size={14} />
-              End Call
-            </button>
+              {/* Header Action: Minimize to chat */}
+              <button
+                onClick={() => setIsCallMinimized(true)}
+                className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition-colors cursor-pointer z-20"
+                title="Minimize Call & Keep Chatting"
+              >
+                <Minimize2 size={16} />
+              </button>
+
+              {/* Ambient Background Aura */}
+              <div className={`absolute -top-24 -left-24 w-48 h-48 rounded-full blur-3xl opacity-30 ${
+                callState === 'connected' ? 'bg-emerald-500' : 'bg-indigo-500'
+              }`} />
+              <div className={`absolute -bottom-24 -right-24 w-48 h-48 rounded-full blur-3xl opacity-30 ${
+                callState === 'incoming' ? 'bg-teal-500' : 'bg-purple-500'
+              }`} />
+
+              {/* Avatar & Pulse Ring */}
+              <div className="relative mt-3">
+                <div className={`w-24 h-24 rounded-full flex items-center justify-center bg-gradient-to-tr ${
+                  callState === 'connected'
+                    ? 'from-emerald-600 to-teal-500 shadow-emerald-500/20'
+                    : callState === 'incoming'
+                    ? 'from-teal-500 to-cyan-500 shadow-teal-500/20'
+                    : 'from-indigo-600 to-violet-500 shadow-indigo-500/20'
+                } shadow-xl text-3xl font-black text-white relative z-10`}>
+                  {callState === 'incoming' && incomingCaller
+                    ? incomingCaller.name.charAt(0).toUpperCase()
+                    : displayName.charAt(0).toUpperCase()}
+                </div>
+
+                {/* Pulsing waves */}
+                <div className="absolute inset-0 rounded-full bg-white/20 animate-ping" />
+              </div>
+
+              {/* Call Status & Info */}
+              <div className="space-y-1 z-10">
+                <h3 className="text-xl font-bold text-slate-100">
+                  {callState === 'incoming' && incomingCaller
+                    ? incomingCaller.name
+                    : callState === 'calling'
+                    ? 'Calling...'
+                    : 'Voice Call Active'}
+                </h3>
+                <p className="text-xs text-slate-400 font-medium">
+                  {callState === 'incoming'
+                    ? `Incoming voice call in ${roomName || 'Chat Room'}`
+                    : callState === 'calling'
+                    ? `Ringing participants in ${roomName || 'Chat Room'}`
+                    : `Duration: ${formatDuration(callDuration)}`}
+                </p>
+              </div>
+
+              {/* WhatsApp style features / Action Buttons */}
+              <div className="w-full flex flex-col gap-3 pt-2 z-10">
+                {callState === 'incoming' ? (
+                  <div className="flex items-center justify-center gap-4 w-full">
+                    <button
+                      onClick={acceptVoiceCall}
+                      className="flex-1 py-3 px-4 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition-all cursor-pointer"
+                    >
+                      <Phone size={18} />
+                      <span>Accept</span>
+                    </button>
+                    <button
+                      onClick={rejectVoiceCall}
+                      className="flex-1 py-3 px-4 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-rose-600/25 transition-all cursor-pointer"
+                    >
+                      <PhoneOff size={18} />
+                      <span>Decline</span>
+                    </button>
+                  </div>
+                ) : callState === 'connected' ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-2 w-full">
+                      <button
+                        onClick={toggleMute}
+                        className={`py-2.5 px-3 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                          isMuted
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
+                        <span>{isMuted ? 'Unmute' : 'Mute'}</span>
+                      </button>
+
+                      <button
+                        onClick={toggleSpeaker}
+                        className={`py-2.5 px-3 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                          isSpeakerMuted
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        {isSpeakerMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                        <span>{isSpeakerMuted ? 'Muted' : 'Speaker'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => setIsCallMinimized(true)}
+                        className="py-2.5 px-3 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all cursor-pointer"
+                      >
+                        <MessageSquare size={18} />
+                        <span>Chat</span>
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={endVoiceCall}
+                      className="w-full py-3 px-4 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-rose-600/25 transition-all cursor-pointer mt-1"
+                    >
+                      <PhoneOff size={18} />
+                      <span>End Call</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => setIsCallMinimized(true)}
+                      className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-2xl font-semibold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer mb-1"
+                    >
+                      <MessageSquare size={16} />
+                      <span>Minimize & Chat</span>
+                    </button>
+                    <button
+                      onClick={endVoiceCall}
+                      className="w-full py-3 px-4 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-rose-600/25 transition-all cursor-pointer"
+                    >
+                      <PhoneOff size={18} />
+                      <span>Cancel Call</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </motion.div>
           </div>
-        </div>
+        )
       )}
 
       {/* Dropdown Options Menu */}
