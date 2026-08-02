@@ -639,6 +639,31 @@ app.prepare().then(() => {
       });
     });
 
+    socket.on('voice_call_raise_hand', ({ roomId, isHandRaised }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      const user = room.users[socket.id];
+      if (!user) return;
+
+      io.to(roomId).emit('voice_call_hand_updated', {
+        userName: user.name,
+        isHandRaised: !!isHandRaised
+      });
+    });
+
+    socket.on('voice_call_reaction', ({ roomId, emoji }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      const user = room.users[socket.id];
+      if (!user) return;
+
+      io.to(roomId).emit('voice_call_reaction_received', {
+        id: crypto.randomUUID(),
+        userName: user.name,
+        emoji
+      });
+    });
+
     socket.on('browser_init', async ({ roomId, width, height }) => {
       try {
         await getOrCreateBrowser(roomId, width, height);

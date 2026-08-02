@@ -250,12 +250,17 @@ export default function ChatRoom() {
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteStreamPeerName, setRemoteStreamPeerName] = useState<string>('');
+  const [callRaisedHands, setCallRaisedHands] = useState<{ [userName: string]: boolean }>({});
+  const [callActiveReactions, setCallActiveReactions] = useState<{ id: string; emoji: string; userName: string }[]>([]);
   const peerConnectionsRef = useRef<{ [peerId: string]: RTCPeerConnection }>({});
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoElementRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRefs = useRef<{ [peerId: string]: HTMLAudioElement }>({});
-  const remoteVideoRefs = useRef<{ [peerId: string]: HTMLVideoElement }>({});
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /* ---- state: prefs ---- */
@@ -697,6 +702,17 @@ export default function ChatRoom() {
       }
     });
 
+    socket.on('voice_call_hand_updated', (data: { userName: string; isHandRaised: boolean }) => {
+      setCallRaisedHands(prev => ({ ...prev, [data.userName]: data.isHandRaised }));
+    });
+
+    socket.on('voice_call_reaction_received', (data: { id: string; userName: string; emoji: string }) => {
+      setCallActiveReactions(prev => [...prev, data]);
+      setTimeout(() => {
+        setCallActiveReactions(prev => prev.filter(r => r.id !== data.id));
+      }, 3500);
+    });
+
     socket.on('voice_call_signal', async (data: { senderId: string; signal: { sdp?: RTCSessionDescriptionInit; ice?: RTCIceCandidateInit } }) => {
       let pc = peerConnectionsRef.current[data.senderId];
       if (!pc) {
@@ -779,13 +795,15 @@ export default function ChatRoom() {
 
     pc.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
+        const stream = event.streams[0];
+        setRemoteStream(stream);
         let audioEl = remoteAudioRefs.current[peerId];
         if (!audioEl) {
           audioEl = new Audio();
           audioEl.autoplay = true;
           remoteAudioRefs.current[peerId] = audioEl;
         }
-        audioEl.srcObject = event.streams[0];
+        audioEl.srcObject = stream;
       }
     };
 
@@ -917,19 +935,19 @@ export default function ChatRoom() {
   const toggleRaiseHand = () => {
     const nextHand = !isHandRaised;
     setIsHandRaised(nextHand);
-    if (socketRef.current && nextHand) {
-      socketRef.current.emit('send_message', {
+    if (socketRef.current) {
+      socketRef.current.emit('voice_call_raise_hand', {
         roomId,
-        message: { content: `${displayName} raised their hand ✋`, type: 'text' }
+        isHandRaised: nextHand
       });
     }
   };
 
   const sendCallReaction = (emoji: string) => {
     if (socketRef.current) {
-      socketRef.current.emit('send_message', {
+      socketRef.current.emit('voice_call_reaction', {
         roomId,
-        message: { content: emoji, type: 'text' }
+        emoji
       });
     }
   };
@@ -1958,23 +1976,89 @@ export default function ChatRoom() {
                 callState === 'incoming' ? 'bg-teal-500' : 'bg-purple-500'
               }`} />
 
-              {/* Avatar & Pulse Ring */}
-              <div className="relative mt-3">
-                <div className={`w-24 h-24 rounded-full flex items-center justify-center bg-gradient-to-tr ${
-                  callState === 'connected'
-                    ? 'from-emerald-600 to-teal-500 shadow-emerald-500/20'
-                    : callState === 'incoming'
-                    ? 'from-teal-500 to-cyan-500 shadow-teal-500/20'
-                    : 'from-indigo-600 to-violet-500 shadow-indigo-500/20'
-                } shadow-xl text-3xl font-black text-white relative z-10`}>
-                  {callState === 'incoming' && incomingCaller
-                    ? incomingCaller.name.charAt(0).toUpperCase()
-                    : displayName.charAt(0).toUpperCase()}
+              {/* Floating In-Call Hand Raise & Reaction Notifications */}
+              {Object.entries(callRaisedHands).some(([_, raised]) => raised) && (
+                <div className="z-20 bg-amber-500/20 border border-amber-500/40 text-amber-300 px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 animate-pulse">
+                  <Hand size={14} />
+                  <span>
+                    {Object.entries(callRaisedHands)
+                      .filter(([_, raised]) => raised)
+                      .map(([name]) => name)
+                      .join(', ')} raised hand!
+                  </span>
                 </div>
+              )}
 
-                {/* Pulsing waves */}
-                <div className="absolute inset-0 rounded-full bg-white/20 animate-ping" />
-              </div>
+              {callActiveReactions.length > 0 && (
+                <div className="absolute top-16 z-30 flex flex-col gap-1 items-center pointer-events-none">
+                  {callActiveReactions.map(r => (
+                    <motion.div
+                      key={r.id}
+                      initial={{ opacity: 0, y: 10, scale: 0.8 }}
+                      animate={{ opacity: 1, y: -10, scale: 1.2 }}
+                      exit={{ opacity: 0, y: -20, scale: 0.8 }}
+                      className="bg-slate-800/90 border border-slate-700 px-3 py-1 rounded-full text-sm font-bold text-slate-100 flex items-center gap-1.5 shadow-lg backdrop-blur-md"
+                    >
+                      <span className="text-xl">{r.emoji}</span>
+                      <span className="text-xs text-slate-300 font-medium">{r.userName}</span>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+
+              {/* Media Video View (Remote Stream or Camera/Screen Share) */}
+              {remoteStream || isScreenSharing || isCameraOn ? (
+                <div className="w-full aspect-video rounded-2xl bg-black/80 border border-slate-800 relative overflow-hidden flex items-center justify-center z-10 shadow-inner">
+                  {remoteStream ? (
+                    <video
+                      ref={el => {
+                        remoteVideoElementRef.current = el;
+                        if (el && remoteStream) {
+                          el.srcObject = remoteStream;
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <video
+                      ref={el => {
+                        localVideoRef.current = el;
+                        const activeStream = screenStreamRef.current || cameraStreamRef.current;
+                        if (el && activeStream) {
+                          el.srcObject = activeStream;
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                  )}
+                  <div className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md px-2.5 py-0.5 rounded-full text-[10px] font-semibold text-slate-300 border border-slate-700">
+                    {remoteStream ? (remoteStreamPeerName || 'Participant Stream') : isScreenSharing ? 'Your Screen Share' : 'Your Camera'}
+                  </div>
+                </div>
+              ) : (
+                /* Avatar & Pulse Ring when audio only */
+                <div className="relative mt-3 z-10">
+                  <div className={`w-24 h-24 rounded-full flex items-center justify-center bg-gradient-to-tr ${
+                    callState === 'connected'
+                      ? 'from-emerald-600 to-teal-500 shadow-emerald-500/20'
+                      : callState === 'incoming'
+                      ? 'from-teal-500 to-cyan-500 shadow-teal-500/20'
+                      : 'from-indigo-600 to-violet-500 shadow-indigo-500/20'
+                  } shadow-xl text-3xl font-black text-white relative z-10`}>
+                    {callState === 'incoming' && incomingCaller
+                      ? incomingCaller.name.charAt(0).toUpperCase()
+                      : displayName.charAt(0).toUpperCase()}
+                  </div>
+
+                  {/* Pulsing waves */}
+                  <div className="absolute inset-0 rounded-full bg-white/20 animate-ping" />
+                </div>
+              )}
 
               {/* Call Status & Info */}
               <div className="space-y-1 z-10">
@@ -1983,7 +2067,7 @@ export default function ChatRoom() {
                     ? incomingCaller.name
                     : callState === 'calling'
                     ? 'Calling...'
-                    : 'Voice Call Active'}
+                    : 'Voice & Video Call Active'}
                 </h3>
                 <p className="text-xs text-slate-400 font-medium">
                   {callState === 'incoming'
