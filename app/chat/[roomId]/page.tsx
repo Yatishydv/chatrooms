@@ -799,6 +799,7 @@ export default function ChatRoom() {
     const stream = await getLocalAudioStream();
     if (!stream) return;
     setCallState('calling');
+    startRingtone();
     socketRef.current?.emit('voice_call_start', { roomId });
   };
 
