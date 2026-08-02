@@ -878,39 +878,36 @@ export default function ChatRoom() {
         screenStreamRef.current.getTracks().forEach(track => track.stop());
         screenStreamRef.current = null;
       }
-      for (const [peerId, pc] of Object.entries(peerConnectionsRef.current)) {
+      for (const pc of Object.values(peerConnectionsRef.current)) {
         const sender = pc.getSenders().find(s => s.track?.kind === 'video');
         if (sender) {
-          pc.removeTrack(sender);
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socketRef.current?.emit('voice_call_signal', {
-            targetId: peerId,
-            signal: { sdp: pc.localDescription }
-          });
+          await sender.replaceTrack(null);
         }
       }
       setIsScreenSharing(false);
     } else {
       try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         screenStreamRef.current = stream;
         setIsScreenSharing(true);
 
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
-          for (const [peerId, pc] of Object.entries(peerConnectionsRef.current)) {
+          for (const pc of Object.values(peerConnectionsRef.current)) {
             const sender = pc.getSenders().find(s => s.track?.kind === 'video');
             if (sender) {
               await sender.replaceTrack(videoTrack);
             } else {
-              pc.addTrack(videoTrack, stream);
+              pc.addTrack(videoTrack, localStreamRef.current || stream);
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
-              socketRef.current?.emit('voice_call_signal', {
-                targetId: peerId,
-                signal: { sdp: pc.localDescription }
-              });
+              const targetId = Object.keys(peerConnectionsRef.current).find(k => peerConnectionsRef.current[k] === pc);
+              if (targetId) {
+                socketRef.current?.emit('voice_call_signal', {
+                  targetId,
+                  signal: { sdp: pc.localDescription }
+                });
+              }
             }
           }
 
@@ -920,16 +917,10 @@ export default function ChatRoom() {
               screenStreamRef.current.getTracks().forEach(t => t.stop());
               screenStreamRef.current = null;
             }
-            for (const [peerId, pc] of Object.entries(peerConnectionsRef.current)) {
+            for (const pc of Object.values(peerConnectionsRef.current)) {
               const sender = pc.getSenders().find(s => s.track?.kind === 'video');
               if (sender) {
-                pc.removeTrack(sender);
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                socketRef.current?.emit('voice_call_signal', {
-                  targetId: peerId,
-                  signal: { sdp: pc.localDescription }
-                });
+                await sender.replaceTrack(null);
               }
             }
           };
@@ -946,16 +937,10 @@ export default function ChatRoom() {
         cameraStreamRef.current.getTracks().forEach(t => t.stop());
         cameraStreamRef.current = null;
       }
-      for (const [peerId, pc] of Object.entries(peerConnectionsRef.current)) {
+      for (const pc of Object.values(peerConnectionsRef.current)) {
         const sender = pc.getSenders().find(s => s.track?.kind === 'video');
         if (sender) {
-          pc.removeTrack(sender);
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socketRef.current?.emit('voice_call_signal', {
-            targetId: peerId,
-            signal: { sdp: pc.localDescription }
-          });
+          await sender.replaceTrack(null);
         }
       }
       setIsCameraOn(false);
@@ -967,18 +952,21 @@ export default function ChatRoom() {
 
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
-          for (const [peerId, pc] of Object.entries(peerConnectionsRef.current)) {
+          for (const pc of Object.values(peerConnectionsRef.current)) {
             const sender = pc.getSenders().find(s => s.track?.kind === 'video');
             if (sender) {
               await sender.replaceTrack(videoTrack);
             } else {
-              pc.addTrack(videoTrack, stream);
+              pc.addTrack(videoTrack, localStreamRef.current || stream);
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
-              socketRef.current?.emit('voice_call_signal', {
-                targetId: peerId,
-                signal: { sdp: pc.localDescription }
-              });
+              const targetId = Object.keys(peerConnectionsRef.current).find(k => peerConnectionsRef.current[k] === pc);
+              if (targetId) {
+                socketRef.current?.emit('voice_call_signal', {
+                  targetId,
+                  signal: { sdp: pc.localDescription }
+                });
+              }
             }
           }
         }
