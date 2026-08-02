@@ -7,7 +7,7 @@ import {
   Send, Image as ImageIcon, Settings, Users, Copy, Check,
   ArrowLeft, Trash2, X, Download, Volume2, VolumeX,
   Search, Sun, Moon, Sparkles, Globe, Lock, CornerUpLeft, Video, Link2, Paperclip, MoreVertical, MessageSquare, Pencil,
-  Phone, PhoneOff, Mic, MicOff, PhoneCall, Minimize2, Maximize2,
+  Phone, PhoneOff, Mic, MicOff, PhoneCall, Minimize2, Maximize2, ScreenShare, ScreenShareOff, VideoOff, Hand, Smile,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import NextImage from 'next/image';
@@ -246,10 +246,16 @@ export default function ChatRoom() {
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
   const [isCallMinimized, setIsCallMinimized] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [isHandRaised, setIsHandRaised] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const peerConnectionsRef = useRef<{ [peerId: string]: RTCPeerConnection }>({});
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRefs = useRef<{ [peerId: string]: HTMLAudioElement }>({});
+  const remoteVideoRefs = useRef<{ [peerId: string]: HTMLVideoElement }>({});
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /* ---- state: prefs ---- */
@@ -839,6 +845,95 @@ export default function ChatRoom() {
     });
   };
 
+  const toggleScreenShare = async () => {
+    if (isScreenSharing) {
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(track => track.stop());
+        screenStreamRef.current = null;
+      }
+      setIsScreenSharing(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        screenStreamRef.current = stream;
+        setIsScreenSharing(true);
+
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          Object.values(peerConnectionsRef.current).forEach(pc => {
+            const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+            if (sender) {
+              sender.replaceTrack(videoTrack);
+            } else {
+              pc.addTrack(videoTrack, stream);
+            }
+          });
+
+          videoTrack.onended = () => {
+            setIsScreenSharing(false);
+            if (screenStreamRef.current) {
+              screenStreamRef.current.getTracks().forEach(t => t.stop());
+              screenStreamRef.current = null;
+            }
+          };
+        }
+      } catch (err) {
+        console.error('Screen sharing canceled or error:', err);
+      }
+    }
+  };
+
+  const toggleCamera = async () => {
+    if (isCameraOn) {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach(t => t.stop());
+        cameraStreamRef.current = null;
+      }
+      setIsCameraOn(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        cameraStreamRef.current = stream;
+        setIsCameraOn(true);
+
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          Object.values(peerConnectionsRef.current).forEach(pc => {
+            const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+            if (sender) {
+              sender.replaceTrack(videoTrack);
+            } else {
+              pc.addTrack(videoTrack, stream);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Camera access error:', err);
+        alert('Could not access camera.');
+      }
+    }
+  };
+
+  const toggleRaiseHand = () => {
+    const nextHand = !isHandRaised;
+    setIsHandRaised(nextHand);
+    if (socketRef.current && nextHand) {
+      socketRef.current.emit('send_message', {
+        roomId,
+        message: { content: `${displayName} raised their hand ✋`, type: 'text' }
+      });
+    }
+  };
+
+  const sendCallReaction = (emoji: string) => {
+    if (socketRef.current) {
+      socketRef.current.emit('send_message', {
+        roomId,
+        message: { content: emoji, type: 'text' }
+      });
+    }
+  };
+
   const cleanupCall = () => {
     stopRingtone();
     if (callTimerRef.current) {
@@ -848,6 +943,14 @@ export default function ChatRoom() {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
+    }
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(track => track.stop());
+      screenStreamRef.current = null;
+    }
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      cameraStreamRef.current = null;
     }
     Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
     peerConnectionsRef.current = {};
@@ -860,6 +963,9 @@ export default function ChatRoom() {
     setIncomingCaller(null);
     setIsMuted(false);
     setIsSpeakerMuted(false);
+    setIsScreenSharing(false);
+    setIsCameraOn(false);
+    setIsHandRaised(false);
     setIsCallMinimized(false);
     setCallDuration(0);
   };
@@ -1935,12 +2041,61 @@ export default function ChatRoom() {
                       </button>
 
                       <button
+                        onClick={toggleScreenShare}
+                        className={`py-2.5 px-3 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                          isScreenSharing
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        {isScreenSharing ? <ScreenShareOff size={18} /> : <ScreenShare size={18} />}
+                        <span>{isScreenSharing ? 'Sharing' : 'Share'}</span>
+                      </button>
+
+                      <button
+                        onClick={toggleCamera}
+                        className={`py-2.5 px-3 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                          isCameraOn
+                            ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
+                        <span>{isCameraOn ? 'Camera On' : 'Camera'}</span>
+                      </button>
+
+                      <button
+                        onClick={toggleRaiseHand}
+                        className={`py-2.5 px-3 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                          isHandRaised
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        <Hand size={18} />
+                        <span>{isHandRaised ? 'Hand Up' : 'Raise Hand'}</span>
+                      </button>
+
+                      <button
                         onClick={() => setIsCallMinimized(true)}
                         className="py-2.5 px-3 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all cursor-pointer"
                       >
                         <MessageSquare size={18} />
                         <span>Chat</span>
                       </button>
+                    </div>
+
+                    {/* Quick Reactions Bar */}
+                    <div className="flex items-center justify-center gap-2 py-1 bg-slate-800/50 rounded-2xl border border-slate-800 w-full">
+                      {['❤️', '👏', '🔥', '😂', '👍'].map(emoji => (
+                        <button
+                          key={emoji}
+                          onClick={() => sendCallReaction(emoji)}
+                          className="hover:scale-125 transition-transform text-lg cursor-pointer p-1"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
                     </div>
 
                     <button
