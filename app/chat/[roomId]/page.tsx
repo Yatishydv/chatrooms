@@ -250,7 +250,8 @@ export default function ChatRoom() {
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [mediaDisplaySize, setMediaDisplaySize] = useState<'normal' | 'large' | 'full'>('large');
+  const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
   const [remoteStreamPeerName, setRemoteStreamPeerName] = useState<string>('');
   const [callRaisedHands, setCallRaisedHands] = useState<{ [userName: string]: boolean }>({});
   const [callActiveReactions, setCallActiveReactions] = useState<{ id: string; emoji: string; userName: string }[]>([]);
@@ -796,7 +797,9 @@ export default function ChatRoom() {
     pc.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
         const stream = event.streams[0];
-        setRemoteStream(stream);
+        if (event.track && event.track.kind === 'video') {
+          setRemoteVideoStream(stream);
+        }
         let audioEl = remoteAudioRefs.current[peerId];
         if (!audioEl) {
           audioEl = new Audio();
@@ -989,6 +992,7 @@ export default function ChatRoom() {
       audio.srcObject = null;
     });
     remoteAudioRefs.current = {};
+    setRemoteVideoStream(null);
     setCallState('idle');
     setIncomingCaller(null);
     setIsMuted(false);
@@ -1964,12 +1968,18 @@ export default function ChatRoom() {
           </motion.div>
         ) : (
           /* Fullscreen Glassmorphism Call Modal Overlay */
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
             <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="w-full max-w-sm rounded-3xl bg-slate-900/95 border border-slate-800 shadow-2xl p-6 text-center text-white backdrop-blur-xl flex flex-col items-center gap-5 relative overflow-hidden"
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className={`w-full ${
+                mediaDisplaySize === 'full'
+                  ? 'max-w-5xl h-[85vh]'
+                  : mediaDisplaySize === 'large'
+                  ? 'max-w-2xl'
+                  : 'max-w-sm'
+              } rounded-3xl bg-slate-900/95 border border-slate-800 shadow-2xl p-5 text-center text-white backdrop-blur-xl flex flex-col items-center gap-4 relative overflow-hidden transition-all duration-300`}
             >
               {/* Header Action: Minimize to chat */}
               <button
@@ -2002,7 +2012,7 @@ export default function ChatRoom() {
               )}
 
               {callActiveReactions.length > 0 && (
-                <div className="absolute top-16 z-30 flex flex-col gap-1 items-center pointer-events-none">
+                <div className="absolute top-14 z-30 flex flex-col gap-1 items-center pointer-events-none">
                   {callActiveReactions.map(r => (
                     <motion.div
                       key={r.id}
@@ -2018,15 +2028,15 @@ export default function ChatRoom() {
                 </div>
               )}
 
-              {/* Media Video View (Remote Stream or Camera/Screen Share) */}
-              {remoteStream || isScreenSharing || isCameraOn ? (
-                <div className="w-full aspect-video rounded-2xl bg-black/80 border border-slate-800 relative overflow-hidden flex items-center justify-center z-10 shadow-inner">
-                  {remoteStream ? (
+              {/* Media Video View (Only displayed when Camera is explicitly ON or Screen Share is ACTIVE) */}
+              {remoteVideoStream || isScreenSharing || isCameraOn ? (
+                <div className="w-full flex-1 min-h-[260px] rounded-2xl bg-black/90 border border-slate-800 relative overflow-hidden flex items-center justify-center z-10 shadow-inner group">
+                  {remoteVideoStream ? (
                     <video
                       ref={el => {
                         remoteVideoElementRef.current = el;
-                        if (el && remoteStream) {
-                          el.srcObject = remoteStream;
+                        if (el && remoteVideoStream) {
+                          el.srcObject = remoteVideoStream;
                         }
                       }}
                       autoPlay
@@ -2045,16 +2055,45 @@ export default function ChatRoom() {
                       autoPlay
                       playsInline
                       muted
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain"
                     />
                   )}
+
+                  {/* Size Manual Control Controls (Normal, Large, Fullscreen) */}
+                  <div className="absolute top-2 left-2 flex items-center gap-1 bg-slate-900/80 backdrop-blur-md p-1 rounded-xl border border-slate-800 z-20">
+                    <button
+                      onClick={() => setMediaDisplaySize('normal')}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
+                        mediaDisplaySize === 'normal' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Default
+                    </button>
+                    <button
+                      onClick={() => setMediaDisplaySize('large')}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
+                        mediaDisplaySize === 'large' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Large
+                    </button>
+                    <button
+                      onClick={() => setMediaDisplaySize('full')}
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
+                        mediaDisplaySize === 'full' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Theatre
+                    </button>
+                  </div>
+
                   <div className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md px-2.5 py-0.5 rounded-full text-[10px] font-semibold text-slate-300 border border-slate-700">
-                    {remoteStream ? (remoteStreamPeerName || 'Participant Stream') : isScreenSharing ? 'Your Screen Share' : 'Your Camera'}
+                    {remoteVideoStream ? (remoteStreamPeerName || 'Participant Video Stream') : isScreenSharing ? 'Your Screen Share' : 'Your Camera'}
                   </div>
                 </div>
               ) : (
-                /* Avatar & Pulse Ring when audio only */
-                <div className="relative mt-3 z-10">
+                /* Avatar & Clean Voice Call Interface */
+                <div className="relative mt-2 z-10 py-3 flex flex-col items-center">
                   <div className={`w-24 h-24 rounded-full flex items-center justify-center bg-gradient-to-tr ${
                     callState === 'connected'
                       ? 'from-emerald-600 to-teal-500 shadow-emerald-500/20'
@@ -2074,12 +2113,12 @@ export default function ChatRoom() {
 
               {/* Call Status & Info */}
               <div className="space-y-1 z-10">
-                <h3 className="text-xl font-bold text-slate-100">
+                <h3 className="text-lg font-bold text-slate-100">
                   {callState === 'incoming' && incomingCaller
                     ? incomingCaller.name
                     : callState === 'calling'
                     ? 'Calling...'
-                    : 'Voice & Video Call Active'}
+                    : (isCameraOn || remoteVideoStream || isScreenSharing) ? 'Video & Voice Call Active' : 'Voice Call Active'}
                 </h3>
                 <p className="text-xs text-slate-400 font-medium">
                   {callState === 'incoming'
